@@ -1,0 +1,41 @@
+server:
+  port: 8080
+  env: prod
+
+database:
+  dsn: "postgres://user:password@localhost:5432/wukong_ai_db?sslmode=disable"
+
+llm:
+  provider: openai
+  api_key: ${OPENAI_API_KEY}
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-mini"
+  embedding_model: "text-embedding-3-small"
+
+agent:
+  max_workers: 5
+  max_sub_agents: 3
+  default_timeout: 600s
+  retry_count: 3
+  stale_job_timeout: 120s
+
+sandbox:
+  base_dir: "./sandbox"
+  python_repl_enabled: true
+  bash_enabled: true
+
+tools:
+  search:
+    tavily_api_key: ${TAVILY_API_KEY}
+    duckduckgo_enabled: true
+  file:
+    allowed_paths:
+      - "./tasks"
+      - "./prompts"
+
+memory:
+  short_term_max_messages: 100
+  long_term_top_k: 10
+
+prompts:
+  dir: "./prompts"

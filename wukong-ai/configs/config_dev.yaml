@@ -1,0 +1,48 @@
+server:
+  port: 8080
+  env: dev
+
+database:
+  dsn: "postgres://postgres:root123@localhost:5432/wukong_ai_db?sslmode=disable"
+
+llm:
+  provider: deepseek
+  api_key: "xxxx"
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-chat"
+  embedding_model: ""
+
+# llm:
+#   provider: ollama
+#   api_key: ""
+#   base_url: "http://localhost:11434"
+#   model: "qwen3:4b"
+#   embedding_model: ""
+
+agent:
+  max_workers: 4
+  max_sub_agents: 4
+  default_timeout: 300s
+  retry_count: 3
+  stale_job_timeout: 60s
+
+sandbox:
+  base_dir: "./sandbox"
+  python_repl_enabled: true
+  bash_enabled: true
+
+tools:
+  search:
+    tavily_api_key: ""
+    duckduckgo_enabled: true
+  file:
+    allowed_paths:
+      - "./tasks"
+      - "./prompts"
+
+memory:
+  short_term_max_messages: 50
+  long_term_top_k: 5
+
+prompts:
+  dir: "./prompts"
