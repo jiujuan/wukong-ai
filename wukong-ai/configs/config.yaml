@@ -5,12 +5,38 @@ server:
 database:
   dsn: "postgres://user:password@localhost:5432/wukong_ai_db?sslmode=disable"
 
+# ── LLM 配置（v1.0：支持熔断 + 限流 + 多模型降级）──────────────────────────
 llm:
+  # 主模型
   provider: openai
   api_key: ${OPENAI_API_KEY}
   base_url: "https://api.openai.com/v1"
   model: "gpt-4o-mini"
   embedding_model: "text-embedding-3-small"
+  embedding_dim: 1536
+  # 主模型限流（0 = 不限）
+  max_rpm: 60
+  max_tpm: 90000
+
+  # 降级链（主模型熔断后依次尝试）
+  fallbacks:
+    - provider: deepseek
+      api_key: ${DEEPSEEK_API_KEY}
+      base_url: "https://api.deepseek.com"
+      model: "deepseek-chat"
+      max_rpm: 30
+      max_tpm: 60000
+    - provider: ollama
+      api_key: ""
+      base_url: "http://localhost:11434"
+      model: "qwen2.5:7b"
+      max_rpm: 0
+      max_tpm: 0
+
+  # 熔断器参数（所有模型共用）
+  circuit_breaker:
+    threshold: 5    # 连续失败 5 次触发熔断
+    timeout: 60s    # 熔断持续 60 秒后进入半开状态
 
 agent:
   max_workers: 5
