@@ -63,10 +63,11 @@ func corsMiddleware() gin.HandlerFunc {
 // Setup 注册路由
 func (r *Router) Setup() {
 	// 创建处理器
-	runHandler := handler.NewRunHandler(r.queue)
-	taskHandler := handler.NewTaskHandler()
-	listHandler := handler.NewListHandler()
-	dagHandler := handler.NewDagHandler()
+	runHandler    := handler.NewRunHandler(r.queue, r.cfg)
+	resumeHandler := handler.NewResumeHandler(r.queue, r.cfg)  // 真实断点续跑
+	taskHandler   := handler.NewTaskHandler()
+	listHandler   := handler.NewListHandler()
+	dagHandler    := handler.NewDagHandler()
 	streamHandler := handler.NewStreamHandler(r.eventBus)
 	cancelHandler := handler.NewCancelHandler(r.queue)
 
@@ -78,19 +79,16 @@ func (r *Router) Setup() {
 	// API 路由
 	api := r.engine.Group("/api")
 	{
-		// 任务相关
-		api.POST("/run", runHandler.Handle)
-		api.POST("/resume", func(c *gin.Context) {
-			c.JSON(200, gin.H{"message": "resume endpoint, use /run with resume_from parameter"})
-		})
-		api.GET("/task", taskHandler.Handle)
-		api.GET("/task/dag", dagHandler.Handle)
-		api.GET("/task/stream", streamHandler.Handle)
-		api.POST("/task/cancel", cancelHandler.Handle)
-		api.GET("/list", listHandler.Handle)
+		api.POST("/run",          runHandler.Handle)
+		api.POST("/resume",       resumeHandler.Handle)  // 断点续跑
+		api.GET("/task",          taskHandler.Handle)
+		api.GET("/task/dag",      dagHandler.Handle)
+		api.GET("/task/stream",   streamHandler.Handle)
+		api.POST("/task/cancel",  cancelHandler.Handle)
+		api.GET("/list",          listHandler.Handle)
 	}
 
-	// 前端 UI 路由 (如果需要)
+	// 前端 UI 路由
 	ui := r.engine.Group("/ui")
 	{
 		ui.GET("/list", func(c *gin.Context) {
