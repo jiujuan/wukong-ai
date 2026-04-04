@@ -10,7 +10,7 @@ import (
 	"github.com/jiujuan/wukong-ai/pkg/prompts"
 )
 
-// Coordinator 协调器节点 - 分析意图，按需调用 Skills
+// Coordinator 协调器节点 - 分析意图，按需调用 Skills，注入对话历史
 type Coordinator struct {
 	llmProvider   llm.LLM
 	promptDir     string
@@ -33,7 +33,9 @@ func (c *Coordinator) Name() string {
 
 // Run 执行协调器逻辑
 func (c *Coordinator) Run(ctx *workflow.WukongContext) error {
-	logger.Info("Coordinator running", "task_id", ctx.Config.TaskID)
+	logger.Info("Coordinator running", "task_id", ctx.Config.TaskID,
+		"conversation_id", ctx.ConversationID)
+
 	if ctx.Config.Mode == workflow.ModeFlash {
 		return c.runFlashMode(ctx)
 	}
@@ -65,9 +67,12 @@ Respond with a JSON object containing:
 		return nil
 	}
 
+	// ── 构建用户消息，如有对话历史则前置注入 ─────────────────────
+	userMessage := c.buildUserMessage(ctx)
+
 	messages := []llm.Message{
 		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: ctx.UserInput},
+		{Role: "user", Content: userMessage},
 	}
 
 	response, err := c.llmProvider.ChatWithHistory(ctx.Context, messages)
@@ -75,7 +80,7 @@ Respond with a JSON object containing:
 		return err
 	}
 
-	intention := c.parseIntention(response) // 解析响应
+	intention := c.parseIntention(response)
 	ctx.State.SetIntention(intention)
 	c.updateConfigBasedOnResponse(ctx, response)
 
@@ -83,8 +88,16 @@ Respond with a JSON object containing:
 	return nil
 }
 
-// tryHandleWithSkill 识别简单任务并直接用 Skill 处理，返回 (结果, 是否已处理)
-// 当前支持：翻译(translate)、简单问答(qa)
+// buildUserMessage 构建携带对话历史的用户消息
+func (c *Coordinator) buildUserMessage(ctx *workflow.WukongContext) string {
+	if ctx.ConversationHistory == "" {
+		return ctx.UserInput
+	}
+	// 将历史前置在当前问题前
+	return ctx.ConversationHistory + ctx.UserInput
+}
+
+// tryHandleWithSkill 识别简单任务并直接用 Skill 处理
 func (c *Coordinator) tryHandleWithSkill(ctx *workflow.WukongContext) (string, bool) {
 	if c.skillRegistry == nil {
 		return "", false
@@ -104,7 +117,7 @@ func (c *Coordinator) tryHandleWithSkill(ctx *workflow.WukongContext) (string, b
 		}
 	}
 
-	// 简单问答识别（Flash 模式下的非翻译短问题）
+	// Flash 模式下简单问答
 	if ctx.Config.Mode == workflow.ModeFlash && len(ctx.UserInput) < 100 {
 		if skill, ok := c.skillRegistry.Get("qa"); ok {
 			result, err := skill.Execute(ctx.Context, ctx.UserInput)
@@ -127,8 +140,10 @@ func (c *Coordinator) runFlashMode(ctx *workflow.WukongContext) error {
 		return nil
 	}
 
+	// 携带对话历史构建完整消息
+	userContent := c.buildUserMessage(ctx)
 	messages := []llm.Message{
-		{Role: "user", Content: ctx.UserInput},
+		{Role: "user", Content: userContent},
 	}
 	var outputBuilder strings.Builder
 
@@ -173,11 +188,11 @@ func (c *Coordinator) runFlashMode(ctx *workflow.WukongContext) error {
 	ctx.State.SetIntention(ctx.UserInput)
 	ctx.State.SetLastNodeOutput(finalOutput)
 	ctx.State.SetFinalOutput(finalOutput)
-	logger.Info("Coordinator flash completed", "task_id", ctx.Config.TaskID, "output_length", len(finalOutput))
+	logger.Info("Coordinator flash completed", "task_id", ctx.Config.TaskID,
+		"output_length", len(finalOutput))
 	return nil
 }
 
-// parseIntention 从响应中解析意图
 func (c *Coordinator) parseIntention(response string) string {
 	lines := strings.Split(response, "\n")
 	for _, line := range lines {
@@ -188,19 +203,15 @@ func (c *Coordinator) parseIntention(response string) string {
 			}
 		}
 	}
-	// 如果无法解析，返回原始响应
 	return strings.TrimSpace(response)
 }
 
-// updateConfigBasedOnResponse 根据响应更新配置
 func (c *Coordinator) updateConfigBasedOnResponse(ctx *workflow.WukongContext, response string) {
 	if strings.Contains(strings.ToLower(response), "needs_planning") &&
 		strings.Contains(strings.ToLower(response), "true") {
 		ctx.Config.PlanEnabled = true
 		ctx.State.PlanEnabled = true
 	}
-
-	// 检查是否需要子代理
 	if strings.Contains(strings.ToLower(response), "needs_subagents") &&
 		strings.Contains(strings.ToLower(response), "true") {
 		ctx.Config.SubAgentEnabled = true
