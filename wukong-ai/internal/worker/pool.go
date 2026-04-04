@@ -10,7 +10,13 @@ import (
 	"github.com/jiujuan/wukong-ai/internal/llm"
 	"github.com/jiujuan/wukong-ai/internal/node"
 	"github.com/jiujuan/wukong-ai/internal/queue"
+	"github.com/jiujuan/wukong-ai/internal/skills"
+	"github.com/jiujuan/wukong-ai/internal/skills/basic"
 	"github.com/jiujuan/wukong-ai/internal/subagent"
+	"github.com/jiujuan/wukong-ai/internal/tools"
+	toolcode "github.com/jiujuan/wukong-ai/internal/tools/code"
+	toolfile "github.com/jiujuan/wukong-ai/internal/tools/file"
+	toolsearch "github.com/jiujuan/wukong-ai/internal/tools/search"
 	"github.com/jiujuan/wukong-ai/internal/workflow"
 	"github.com/jiujuan/wukong-ai/pkg/config"
 	"github.com/jiujuan/wukong-ai/pkg/logger"
@@ -45,7 +51,6 @@ func (p *Pool) SetEngine(eventBus workflow.EventBus) {
 // Start 启动 Worker Pool
 func (p *Pool) Start(ctx context.Context, llmProvider llm.LLM, agentCfg *config.AgentConfig, promptDir string) {
 	logger.Info("starting worker pool", "size", p.size)
-
 	for i := 0; i < p.size; i++ {
 		p.wg.Add(1)
 		workerID := fmt.Sprintf("worker-%d", i)
@@ -56,11 +61,9 @@ func (p *Pool) Start(ctx context.Context, llmProvider llm.LLM, agentCfg *config.
 // runWorker 运行单个 Worker
 func (p *Pool) runWorker(ctx context.Context, workerID string, llmProvider llm.LLM, agentCfg *config.AgentConfig, promptDir string) {
 	defer p.wg.Done()
-
 	logger.Info("worker started", "worker_id", workerID)
 
-	// 创建节点
-	scheduler := subagent.NewScheduler(agentCfg.MaxSubAgents)
+	scheduler := subagent.NewScheduler(agentCfg.MaxSubAgents) // 创建节点
 
 	// 循环获取任务
 	for {
@@ -81,7 +84,6 @@ func (p *Pool) runWorker(ctx context.Context, workerID string, llmProvider llm.L
 			time.Sleep(5 * time.Second)
 			continue
 		}
-
 		if job == nil {
 			// 队列为空，等待
 			time.Sleep(2 * time.Second)
@@ -89,7 +91,6 @@ func (p *Pool) runWorker(ctx context.Context, workerID string, llmProvider llm.L
 		}
 
 		logger.Info("worker picked job", "worker_id", workerID, "task_id", job.TaskID)
-
 		// 执行任务
 		p.executeJob(ctx, job, llmProvider, agentCfg, promptDir, scheduler)
 	}
@@ -97,7 +98,6 @@ func (p *Pool) runWorker(ctx context.Context, workerID string, llmProvider llm.L
 
 // executeJob 执行任务
 func (p *Pool) executeJob(ctx context.Context, job *queue.TaskJob, llmProvider llm.LLM, agentCfg *config.AgentConfig, promptDir string, scheduler *subagent.Scheduler) {
-	// 解析请求
 	var req RunRequest
 	if err := json.Unmarshal(job.Payload, &req); err != nil {
 		logger.Error("failed to unmarshal job payload", "task_id", job.TaskID, "err", err)
@@ -108,7 +108,6 @@ func (p *Pool) executeJob(ctx context.Context, job *queue.TaskJob, llmProvider l
 	// 创建执行上下文
 	cfg := workflow.NewRunConfig(agentCfg)
 	cfg.TaskID = job.TaskID
-	cfg.Mode = workflow.AutoSelectMode(cfg)
 	cfg.ThinkingEnabled = req.ThinkingEnabled
 	cfg.PlanEnabled = req.PlanEnabled
 	cfg.SubAgentEnabled = req.SubAgentEnabled
@@ -118,16 +117,27 @@ func (p *Pool) executeJob(ctx context.Context, job *queue.TaskJob, llmProvider l
 	if req.TimeoutSeconds > 0 {
 		cfg.Timeout = time.Duration(req.TimeoutSeconds) * time.Second
 	}
+	cfg.Mode = workflow.AutoSelectMode(cfg)
 
 	wCtx := workflow.NewWukongContext(cfg, llmProvider, req.UserInput)
 	wCtx.State.Mode = cfg.Mode.String()
 	wCtx.EventBus = p.eventBus
 
-	// 创建工作流
-	nodes := createNodes(llmProvider, scheduler, promptDir)
-	wf := workflow.BuildWorkflow(cfg.Mode, nodes)
+	// ── 注册 Tools ──────────────────────────────────────────────
+	registerTools(wCtx.ToolRegistry, agentCfg, req)
 
-	// 创建引擎
+	// ── 注册 Skills ─────────────────────────────────────────────
+	registerSkills(wCtx.SkillRegistry, llmProvider)
+
+	logger.Info("registered tools and skills",
+		"task_id", job.TaskID,
+		"tools", wCtx.ToolRegistry.GetNames(),
+		"skills", wCtx.SkillRegistry.GetNames(),
+	)
+
+	// 创建节点（注入 ToolRegistry / SkillRegistry）
+	nodes := createNodes(llmProvider, scheduler, promptDir, wCtx.ToolRegistry, wCtx.SkillRegistry)
+	wf := workflow.BuildWorkflow(cfg.Mode, nodes)
 	engine := workflow.NewEngine(wf, p.eventBus)
 
 	// 检查是否需要从断点恢复
@@ -151,6 +161,66 @@ func (p *Pool) executeJob(ctx context.Context, job *queue.TaskJob, llmProvider l
 	logger.Info("job completed", "task_id", job.TaskID)
 }
 
+// registerTools 根据配置初始化并注册所有工具到 ToolRegistry
+func registerTools(registry *tools.ToolRegistry, agentCfg *config.AgentConfig, req RunRequest) {
+	// 搜索工具：优先 Tavily，否则 DuckDuckGo，均不可用时用 Mock
+	if req.TavilyAPIKey != "" {
+		registry.Register(toolsearch.NewTavilySearch(req.TavilyAPIKey))
+		logger.Debug("tool registered: tavily_search")
+	} else if req.DuckDuckGoEnabled {
+		registry.Register(toolsearch.NewDuckDuckGoSearch())
+		logger.Debug("tool registered: duckduckgo_search")
+	} else {
+		registry.Register(toolsearch.NewMockSearch())
+		logger.Debug("tool registered: mock_search (fallback)")
+	}
+
+	// 文件读写工具
+	if len(req.FileAllowedPaths) > 0 {
+		registry.Register(toolfile.NewReader(req.FileAllowedPaths))
+		registry.Register(toolfile.NewWriter(req.FileAllowedPaths))
+		logger.Debug("tool registered: file_reader, file_writer")
+	}
+
+	// 代码执行工具
+	if req.SandboxDir != "" {
+		if req.PythonReplEnabled {
+			registry.Register(toolcode.NewPythonREPL(req.SandboxDir, true))
+			logger.Debug("tool registered: python_repl")
+		}
+		if req.BashEnabled {
+			registry.Register(toolcode.NewBashExec(req.SandboxDir, true))
+			logger.Debug("tool registered: bash_exec")
+		}
+	}
+}
+
+// registerSkills 初始化并注册所有基础技能到 SkillRegistry
+func registerSkills(registry *skills.SkillRegistry, llmProvider llm.LLM) {
+	registry.Register(basic.NewSummarize(llmProvider))
+	registry.Register(basic.NewTranslate(llmProvider))
+	registry.Register(basic.NewQA(llmProvider))
+	logger.Debug("skills registered: summarize, translate, qa")
+}
+
+// createNodes 创建工作流节点，注入 ToolRegistry 和 SkillRegistry
+func createNodes(
+	llmProvider llm.LLM,
+	scheduler *subagent.Scheduler,
+	promptDir string,
+	toolRegistry *tools.ToolRegistry,
+	skillRegistry *skills.SkillRegistry,
+) *workflow.NodeSet {
+	return &workflow.NodeSet{
+		Coordinator:     node.NewCoordinator(llmProvider, promptDir, skillRegistry),
+		Background:      node.NewBackground(llmProvider, promptDir, toolRegistry),
+		Planner:         node.NewPlanner(llmProvider, promptDir),
+		Researcher:      node.NewResearcher(llmProvider, promptDir, toolRegistry),
+		SubAgentManager: node.NewSubAgentManager(scheduler, 3, toolRegistry),
+		Reporter:        node.NewReporter(llmProvider, promptDir, skillRegistry),
+	}
+}
+
 // GracefulStop 优雅关闭
 func (p *Pool) GracefulStop() {
 	logger.Info("stopping worker pool")
@@ -164,19 +234,7 @@ func (p *Pool) GetSize() int {
 	return p.size
 }
 
-// createNodes 创建工作流节点
-func createNodes(llmProvider llm.LLM, scheduler *subagent.Scheduler, promptDir string) *workflow.NodeSet {
-	return &workflow.NodeSet{
-		Coordinator:     node.NewCoordinator(llmProvider, promptDir),
-		Background:      node.NewBackground(llmProvider, promptDir),
-		Planner:         node.NewPlanner(llmProvider, promptDir),
-		Researcher:      node.NewResearcher(llmProvider, promptDir),
-		SubAgentManager: node.NewSubAgentManager(scheduler, 3),
-		Reporter:        node.NewReporter(llmProvider, promptDir),
-	}
-}
-
-// RunRequest 运行请求
+// RunRequest 运行请求（含工具开关透传）
 type RunRequest struct {
 	UserInput       string `json:"user_input"`
 	ThinkingEnabled bool   `json:"thinking_enabled"`
@@ -185,4 +243,11 @@ type RunRequest struct {
 	MaxSubAgents    int    `json:"max_sub_agents"`
 	TimeoutSeconds  int    `json:"timeout_seconds"`
 	ResumeFrom      string `json:"resume_from,omitempty"`
+	// 工具相关配置（从任务请求透传，优先级高于全局 config）
+	TavilyAPIKey      string   `json:"tavily_api_key,omitempty"`
+	DuckDuckGoEnabled bool     `json:"duckduckgo_enabled"`
+	FileAllowedPaths  []string `json:"file_allowed_paths,omitempty"`
+	SandboxDir        string   `json:"sandbox_dir,omitempty"`
+	PythonReplEnabled bool     `json:"python_repl_enabled"`
+	BashEnabled       bool     `json:"bash_enabled"`
 }
