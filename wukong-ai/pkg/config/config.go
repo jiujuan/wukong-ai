@@ -27,30 +27,58 @@ type DatabaseConfig struct {
 	DSN string `mapstructure:"dsn"`
 }
 
-// LLMConfig LLM 模型配置
+// LLMConfig 主模型 + 降级链配置
 type LLMConfig struct {
+	// ── 主模型（向前兼容旧配置）──────────────────────────────────
 	Provider       string `mapstructure:"provider"`        // openai / deepseek / ollama
-	APIKey         string `mapstructure:"api_key"`         // 可通过 ${ENV_VAR} 使用环境变量
-	BaseURL        string `mapstructure:"base_url"`        // API 基础 URL
-	Model          string `mapstructure:"model"`           // 聊天模型
-	EmbeddingModel string `mapstructure:"embedding_model"` // 向量化模型
-	EmbeddingDim   int    `mapstructure:"embedding_dim"`   // 向量维度 (OpenAI text-embedding-3-small = 1536)
+	APIKey         string `mapstructure:"api_key"`
+	BaseURL        string `mapstructure:"base_url"`
+	Model          string `mapstructure:"model"`
+	EmbeddingModel string `mapstructure:"embedding_model"`
+	EmbeddingDim   int    `mapstructure:"embedding_dim"`
+
+	// ── 限流（主模型）─────────────────────────────────────────────
+	MaxRPM int `mapstructure:"max_rpm"` // 每分钟最大请求数，0 = 不限
+	MaxTPM int `mapstructure:"max_tpm"` // 每分钟最大 Token 数，0 = 不限
+
+	// ── 降级链（可选）────────────────────────────────────────────
+	// 配置后主模型失败时依次尝试 Fallbacks 中的模型
+	Fallbacks []FallbackLLMConfig `mapstructure:"fallbacks"`
+
+	// ── 熔断器全局参数──────────────────────────────────────────
+	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
+}
+
+// FallbackLLMConfig 降级链中单个备用模型配置
+type FallbackLLMConfig struct {
+	Provider string `mapstructure:"provider"` // openai / deepseek / ollama
+	APIKey   string `mapstructure:"api_key"`
+	BaseURL  string `mapstructure:"base_url"`
+	Model    string `mapstructure:"model"`
+	MaxRPM   int    `mapstructure:"max_rpm"`
+	MaxTPM   int    `mapstructure:"max_tpm"`
+}
+
+// CircuitBreakerConfig 熔断器参数
+type CircuitBreakerConfig struct {
+	Threshold int           `mapstructure:"threshold"` // 连续失败次数阈值（默认 5）
+	Timeout   time.Duration `mapstructure:"timeout"`   // 熔断持续时间（默认 60s）
 }
 
 // AgentConfig Agent 配置
 type AgentConfig struct {
-	MaxWorkers      int           `mapstructure:"max_workers"`       // Worker Pool 大小
-	MaxSubAgents    int           `mapstructure:"max_sub_agents"`    // 单个 DAG 内最大子 Agent 并发数
-	DefaultTimeout  time.Duration `mapstructure:"default_timeout"`   // 单任务最大执行时长
-	RetryCount      int           `mapstructure:"retry_count"`       // 失败重试次数
-	StaleJobTimeout time.Duration `mapstructure:"stale_job_timeout"` // 判定僵尸任务的超时阈值
+	MaxWorkers      int           `mapstructure:"max_workers"`
+	MaxSubAgents    int           `mapstructure:"max_sub_agents"`
+	DefaultTimeout  time.Duration `mapstructure:"default_timeout"`
+	RetryCount      int           `mapstructure:"retry_count"`
+	StaleJobTimeout time.Duration `mapstructure:"stale_job_timeout"`
 }
 
 // SandboxConfig 沙箱执行环境配置
 type SandboxConfig struct {
-	BaseDir           string `mapstructure:"base_dir"`            // 沙箱根目录
-	PythonReplEnabled bool   `mapstructure:"python_repl_enabled"` // 是否启用 Python REPL
-	BashEnabled       bool   `mapstructure:"bash_enabled"`        // 是否启用 Bash 执行
+	BaseDir           string `mapstructure:"base_dir"`
+	PythonReplEnabled bool   `mapstructure:"python_repl_enabled"`
+	BashEnabled       bool   `mapstructure:"bash_enabled"`
 }
 
 // ToolsConfig 工具系统配置
@@ -67,16 +95,22 @@ type SearchConfig struct {
 
 // FileConfig 文件工具配置
 type FileConfig struct {
-	AllowedPaths []string `mapstructure:"allowed_paths"` // 允许访问的目录列表
+	AllowedPaths []string `mapstructure:"allowed_paths"`
 }
 
 // MemoryConfig 记忆系统配置
 type MemoryConfig struct {
-	ShortTermMaxMessages int `mapstructure:"short_term_max_messages"` // 短期记忆最大消息数
-	LongTermTopK         int `mapstructure:"long_term_top_k"`         // 长期记忆检索返回条数
+	ShortTermMaxMessages int `mapstructure:"short_term_max_messages"`
+	LongTermTopK         int `mapstructure:"long_term_top_k"`
 }
 
 // PromptsConfig 提示词配置
 type PromptsConfig struct {
-	Dir string `mapstructure:"dir"` // 提示词文件目录
+	Dir string `mapstructure:"dir"`
 }
+
+// DefaultCircuitBreakerThreshold 熔断器默认阈值
+const DefaultCircuitBreakerThreshold = 5
+
+// DefaultCircuitBreakerTimeout 熔断器默认超时
+const DefaultCircuitBreakerTimeout = 60 * time.Second
