@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/jiujuan/wukong-ai/internal/llm"
+	"github.com/jiujuan/wukong-ai/internal/skills"
+	"github.com/jiujuan/wukong-ai/internal/tools"
 	"github.com/jiujuan/wukong-ai/pkg/config"
 	"github.com/jiujuan/wukong-ai/pkg/uuid"
 )
@@ -16,12 +18,16 @@ type WukongContext struct {
 	Config      *RunConfig
 	State       *RunState
 	LLMProvider llm.LLM
-	EventBus    interface{ Publish(taskID string, event ProgressEvent) }
+	EventBus    interface {
+		Publish(taskID string, event ProgressEvent)
+	}
+	ToolRegistry  *tools.ToolRegistry   // 工具注册表，节点按需调用
+	SkillRegistry *skills.SkillRegistry // 技能注册表，节点按需调用
 }
 
 // RunConfig 单次执行配置
 type RunConfig struct {
-	TaskID          string        // 由 pkg/uuid.NewTaskID() 生成
+	TaskID          string // 由 pkg/uuid.NewTaskID() 生成
 	Mode            Mode
 	ThinkingEnabled bool
 	PlanEnabled     bool
@@ -45,14 +51,16 @@ func NewRunConfig(agentCfg *config.AgentConfig) *RunConfig {
 	}
 }
 
-// NewWukongContext 创建新的执行上下文
+// NewWukongContext 创建新的执行上下文（含空的 ToolRegistry 和 SkillRegistry）
 func NewWukongContext(cfg *RunConfig, llmProvider llm.LLM, userInput string) *WukongContext {
 	return &WukongContext{
-		Context:     context.Background(),
-		UserInput:   userInput,
-		Config:      cfg,
-		State:       NewRunState(cfg.TaskID, userInput),
-		LLMProvider: llmProvider,
+		Context:       context.Background(),
+		UserInput:     userInput,
+		Config:        cfg,
+		State:         NewRunState(cfg.TaskID, userInput),
+		LLMProvider:   llmProvider,
+		ToolRegistry:  tools.NewToolRegistry(),
+		SkillRegistry: skills.NewSkillRegistry(),
 	}
 }
 
@@ -60,11 +68,13 @@ func NewWukongContext(cfg *RunConfig, llmProvider llm.LLM, userInput string) *Wu
 func NewWukongContextWithCancel(cfg *RunConfig, llmProvider llm.LLM, userInput string) (*WukongContext, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	return &WukongContext{
-		Context:     ctx,
-		UserInput:   userInput,
-		Config:      cfg,
-		State:       NewRunState(cfg.TaskID, userInput),
-		LLMProvider: llmProvider,
+		Context:       ctx,
+		UserInput:     userInput,
+		Config:        cfg,
+		State:         NewRunState(cfg.TaskID, userInput),
+		LLMProvider:   llmProvider,
+		ToolRegistry:  tools.NewToolRegistry(),
+		SkillRegistry: skills.NewSkillRegistry(),
 	}, cancel
 }
 
