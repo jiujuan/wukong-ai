@@ -8,23 +8,27 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jiujuan/wukong-ai/internal/db/repository"
 	"github.com/jiujuan/wukong-ai/internal/queue"
+	"github.com/jiujuan/wukong-ai/internal/worker"
+	"github.com/jiujuan/wukong-ai/pkg/config"
 	"github.com/jiujuan/wukong-ai/pkg/logger"
 	"github.com/jiujuan/wukong-ai/pkg/uuid"
 )
 
 // RunHandler 运行处理器
 type RunHandler struct {
-	queue *queue.PersistentQueue
+	queue  *queue.PersistentQueue
+	appCfg *config.AppConfig // 持有全局配置，用于填充工具默认值
 }
 
 // NewRunHandler 创建运行处理器
-func NewRunHandler(queue *queue.PersistentQueue) *RunHandler {
+func NewRunHandler(queue *queue.PersistentQueue, appCfg *config.AppConfig) *RunHandler {
 	return &RunHandler{
-		queue: queue,
+		queue:  queue,
+		appCfg: appCfg,
 	}
 }
 
-// RunRequest 运行请求
+// RunRequest HTTP 请求体（用户可选覆盖工具开关）
 type RunRequest struct {
 	UserInput       string `json:"user_input" binding:"required"`
 	ThinkingEnabled bool   `json:"thinking_enabled"`
@@ -47,17 +51,14 @@ type RunResponse struct {
 // Handle 处理运行请求
 func (h *RunHandler) Handle(c *gin.Context) {
 	var req RunRequest
-
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 生成 task_id
 	taskID := uuid.NewTaskID()
 	createTime := time.Now().Format(time.RFC3339)
 
-	// 创建初始状态
 	state := &repository.Task{
 		ID:              taskID,
 		Status:          "queued",
@@ -76,21 +77,20 @@ func (h *RunHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	// 序列化请求作为 payload
-	payload, err := json.Marshal(req)
+	// 构造 worker.RunRequest，从全局配置填充工具默认值
+	workerReq := h.buildWorkerRequest(req)
+	payload, err := json.Marshal(workerReq)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to marshal request"})
 		return
 	}
 
-	// 入队
 	if err := h.queue.Enqueue(c.Request.Context(), taskID, payload, 0); err != nil {
 		logger.Error("failed to enqueue task", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
 		return
 	}
 
-	// 立即返回
 	c.JSON(http.StatusAccepted, RunResponse{
 		TaskID:     taskID,
 		Status:     "queued",
@@ -100,7 +100,29 @@ func (h *RunHandler) Handle(c *gin.Context) {
 	})
 }
 
-// determineMode 确定执行模式
+// buildWorkerRequest 从 HTTP 请求 + 全局配置组合出 worker.RunRequest
+func (h *RunHandler) buildWorkerRequest(req RunRequest) worker.RunRequest {
+	toolsCfg := h.appCfg.Tools
+	sandboxCfg := h.appCfg.Sandbox
+
+	return worker.RunRequest{
+		UserInput:       req.UserInput,
+		ThinkingEnabled: req.ThinkingEnabled,
+		PlanEnabled:     req.PlanEnabled,
+		SubAgentEnabled: req.SubAgentEnabled,
+		MaxSubAgents:    req.MaxSubAgents,
+		TimeoutSeconds:  req.TimeoutSeconds,
+		// 工具配置 —— 读自全局 config
+		TavilyAPIKey:      toolsCfg.Search.TavilyAPIKey,
+		DuckDuckGoEnabled: toolsCfg.Search.DuckDuckGoEnabled,
+		FileAllowedPaths:  toolsCfg.File.AllowedPaths,
+		SandboxDir:        sandboxCfg.BaseDir,
+		PythonReplEnabled: sandboxCfg.PythonReplEnabled,
+		BashEnabled:       sandboxCfg.BashEnabled,
+	}
+}
+
+// determineMode 确定执行模式字符串
 func (h *RunHandler) determineMode(req RunRequest) string {
 	if !req.ThinkingEnabled && !req.PlanEnabled && !req.SubAgentEnabled {
 		return "flash"
