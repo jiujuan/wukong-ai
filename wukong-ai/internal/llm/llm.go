@@ -14,8 +14,14 @@ type LLM interface {
 	ChatWithHistory(ctx context.Context, messages []Message) (string, error)
 	// Embed 生成文本向量
 	Embed(ctx context.Context, text string) ([]float32, error)
+	// SupportsVision 是否支持图片理解（Vision）
+	SupportsVision() bool
+	// ChatWithImages 发送携带图片的消息（Vision 专用）
+	// images: base64 编码的图片列表
+	ChatWithImages(ctx context.Context, prompt string, images []string) (string, error)
 }
 
+// StreamLLM 流式输出扩展接口
 type StreamLLM interface {
 	ChatWithHistoryStream(ctx context.Context, messages []Message, onChunk func(chunk string) error) error
 }
