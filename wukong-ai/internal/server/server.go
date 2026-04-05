@@ -16,6 +16,8 @@ import (
 	"github.com/jiujuan/wukong-ai/internal/llm"
 	"github.com/jiujuan/wukong-ai/internal/queue"
 	"github.com/jiujuan/wukong-ai/internal/state"
+	"github.com/jiujuan/wukong-ai/internal/parser"
+	"github.com/jiujuan/wukong-ai/internal/upload"
 	"github.com/jiujuan/wukong-ai/internal/worker"
 	"github.com/jiujuan/wukong-ai/pkg/config"
 	"github.com/jiujuan/wukong-ai/pkg/logger"
@@ -30,6 +32,8 @@ type Server struct {
 	queue       *queue.PersistentQueue
 	workerPool  *worker.Pool
 	llmProvider llm.LLM
+	extractor    *parser.Extractor
+	uploadSvc   *upload.UploadService
 	restartCh   chan struct{}
 	serverMu    sync.Mutex
 }
@@ -57,6 +61,10 @@ func New(cfg *config.AppConfig, llmProvider llm.LLM) *Server {
 	// 创建 Worker Pool
 	workerPool := worker.NewPool(cfg.Agent.MaxWorkers, taskQueue, worker.NewWorkflowEventBusAdapter(eventBus))
 
+	// 创建附件提取器（v1.1）
+	extractor := parser.NewExtractor(2, nil) // embedFn 在 Start 时注入
+	uploadSvc := upload.NewUploadService("./uploads")
+
 	s := &Server{
 		cfg:         cfg,
 		eventBus:    eventBus,
@@ -64,6 +72,8 @@ func New(cfg *config.AppConfig, llmProvider llm.LLM) *Server {
 		queue:       taskQueue,
 		workerPool:  workerPool,
 		llmProvider: llmProvider,
+		extractor:    extractor,
+		uploadSvc:   uploadSvc,
 		restartCh:   make(chan struct{}, 1),
 	}
 	s.httpServer = s.newHTTPServer()
@@ -72,6 +82,9 @@ func New(cfg *config.AppConfig, llmProvider llm.LLM) *Server {
 
 // Start 启动服务器
 func (s *Server) Start(ctx context.Context, llmProvider llm.LLM) {
+	// 启动附件提取器，注入 embedFn
+	s.extractor = parser.NewExtractor(2, llmProvider.Embed)
+	s.extractor.Start(ctx)
 	s.workerPool.Start(ctx, llmProvider, &s.cfg.Agent, s.cfg.Prompts.Dir)
 	go s.watchAndRestart(ctx)
 
@@ -135,7 +148,7 @@ func (s *Server) GetQueue() *queue.PersistentQueue {
 }
 
 func (s *Server) newHTTPServer() *http.Server {
-	router := NewRouter(s.cfg, s.eventBus, s.stateMgr, s.queue, s.llmProvider)
+	router := NewRouter(s.cfg, s.eventBus, s.stateMgr, s.queue, s.llmProvider, s.extractor, s.uploadSvc)
 	router.Setup()
 	return &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.cfg.Server.Port),
