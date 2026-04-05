@@ -250,3 +250,60 @@ func formatOllamaAPIError(prefix string, statusCode int, body []byte) error {
 	}
 	return fmt.Errorf("%s: status=%d, body=%s", prefix, statusCode, string(body))
 }
+
+// SupportsVision Ollama 根据模型名判断是否支持 Vision
+// 已知支持 Vision 的模型：llava, llava-llama3, bakllava, moondream, minicpm-v
+func (o *OllamaLLM) SupportsVision() bool {
+	modelLower := strings.ToLower(o.model)
+	visionModels := []string{"llava", "bakllava", "moondream", "minicpm-v", "cogvlm"}
+	for _, vm := range visionModels {
+		if strings.Contains(modelLower, vm) {
+			return true
+		}
+	}
+	return false
+}
+
+// ChatWithImages Ollama Vision 调用（使用 /api/generate 接口的 images 字段）
+func (o *OllamaLLM) ChatWithImages(ctx context.Context, prompt string, images []string) (string, error) {
+	if !o.SupportsVision() {
+		return o.Chat(ctx, prompt)
+	}
+
+	reqBody := map[string]any{
+		"model":  o.model,
+		"prompt": prompt,
+		"images": images, // Ollama 原生支持 base64 images 字段
+		"stream": false,
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("OllamaLLM ChatWithImages marshal: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/generate", o.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Ollama Vision error: status=%d", resp.StatusCode)
+	}
+
+	var result struct {
+		Response string `json:"response"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("Ollama Vision parse error: %w", err)
+	}
+	return result.Response, nil
+}
