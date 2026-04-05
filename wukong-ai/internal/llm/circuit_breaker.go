@@ -54,12 +54,14 @@ func NewCircuitBreaker(providerName string, threshold int, timeout time.Duration
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
-	return &CircuitBreaker{
+	cb := &CircuitBreaker{
 		providerName: providerName,
 		state:        StateClosed,
 		threshold:    threshold,
 		timeout:      timeout,
 	}
+	logger.Info("circuit breaker initialized", "provider", providerName, "threshold", threshold, "timeout_s", timeout.Seconds())
+	return cb
 }
 
 // Allow 判断是否允许本次调用
@@ -113,6 +115,12 @@ func (cb *CircuitBreaker) RecordFailure() {
 		if cb.failures >= cb.threshold {
 			cb.state = StateOpen
 			logger.Warn("circuit breaker opened",
+				"provider", cb.providerName,
+				"failures", cb.failures,
+				"threshold", cb.threshold,
+			)
+		} else {
+			logger.Warn("circuit breaker failure recorded",
 				"provider", cb.providerName,
 				"failures", cb.failures,
 				"threshold", cb.threshold,

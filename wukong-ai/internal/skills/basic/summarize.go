@@ -2,6 +2,7 @@ package basic
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/jiujuan/wukong-ai/internal/llm"
@@ -32,9 +33,14 @@ func (s *Summarize) Description() string {
 
 // Execute 执行技能
 func (s *Summarize) Execute(ctx context.Context, input string) (string, error) {
+	cleanInput := strings.TrimSpace(input)
+	if cleanInput == "" {
+		return "", fmt.Errorf("summarize: empty input")
+	}
+
 	prompt := `Please summarize the following text into concise key points:
 
-"""` + input + `"""
+"""` + cleanInput + `"""
 
 Provide a clear and concise summary with main points.`
 
@@ -43,7 +49,15 @@ Provide a clear and concise summary with main points.`
 		{Role: "user", Content: prompt},
 	}
 
-	return s.llmProvider.ChatWithHistory(ctx, messages)
+	result, err := s.llmProvider.ChatWithHistory(ctx, messages)
+	if err != nil {
+		return "", err
+	}
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return "", fmt.Errorf("summarize: empty output")
+	}
+	return result, nil
 }
 
 // GetPrompt 获取系统提示词

@@ -152,14 +152,14 @@ func (h *RunHandler) buildWorkerRequest(req RunRequest) worker.RunRequest {
 }
 
 func (h *RunHandler) determineMode(req RunRequest) string {
-	if !req.ThinkingEnabled && !req.PlanEnabled && !req.SubAgentEnabled {
-		return "flash"
+	if req.SubAgentEnabled {
+		return "ultra"
 	}
-	if req.ThinkingEnabled && !req.PlanEnabled && !req.SubAgentEnabled {
-		return "standard"
-	}
-	if req.ThinkingEnabled && req.PlanEnabled && !req.SubAgentEnabled {
+	if req.PlanEnabled {
 		return "pro"
 	}
-	return "ultra"
+	if req.ThinkingEnabled {
+		return "standard"
+	}
+	return "flash"
 }

@@ -16,9 +16,7 @@ export function TaskDetailPage() {
   // 加载任务详情
   useEffect(() => {
     if (taskId) {
-      if (currentTask?.task_id && currentTask.task_id !== taskId) {
-        clearEvents()
-      }
+      clearEvents()
       getTask(taskId)
     }
   }, [taskId, getTask, clearEvents, currentTask?.task_id])

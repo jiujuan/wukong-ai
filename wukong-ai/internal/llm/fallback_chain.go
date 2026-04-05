@@ -55,6 +55,8 @@ func (c *FallbackChain) Chat(ctx context.Context, prompt string) (string, error)
 // ChatWithHistory 实现 LLM.ChatWithHistory，自动熔断 + 限流 + 降级
 func (c *FallbackChain) ChatWithHistory(ctx context.Context, messages []Message) (string, error) {
 	var lastErr error
+	openSkipped := 0
+	logger.Info("fallback chain chat start", "provider_count", len(c.entries), "message_count", len(messages))
 
 	for i, entry := range c.entries {
 		providerName := entry.provider.Name()
@@ -66,12 +68,14 @@ func (c *FallbackChain) ChatWithHistory(ctx context.Context, messages []Message)
 				"state", entry.breaker.GetState().String(),
 			)
 			c.callMetrics.Record(providerName, "skipped", 0)
+			openSkipped++
 			continue
 		}
 
 		// ── 2. 限流等待 ────────────────────────────────────────
 		// 简单估算 token 数：字符总数 / 4（粗略），最少估 100
 		estimatedTokens := estimateTokens(messages)
+		logger.Debug("fallback chain estimated tokens", "provider", providerName, "estimated_tokens", estimatedTokens)
 		if err := entry.rateLimiter.Wait(ctx, estimatedTokens); err != nil {
 			logger.Warn("rate limiter wait failed", "provider", providerName, "err", err)
 			lastErr = err
@@ -116,7 +120,39 @@ func (c *FallbackChain) ChatWithHistory(ctx context.Context, messages []Message)
 		return result, nil
 	}
 
+	// 所有 provider 都因熔断被跳过时，强制探测首选 provider 一次，避免整个任务链路完全无法前进
+	if lastErr == nil && openSkipped == len(c.entries) && len(c.entries) > 0 {
+		entry := c.entries[0]
+		providerName := entry.provider.Name()
+		logger.Warn("all providers skipped by breaker, force probing primary provider", "provider", providerName)
+
+		estimatedTokens := estimateTokens(messages)
+		if err := entry.rateLimiter.Wait(ctx, estimatedTokens); err != nil {
+			lastErr = err
+		} else {
+			start := time.Now()
+			result, err := entry.provider.ChatWithHistory(ctx, messages)
+			elapsed := time.Since(start)
+			if err != nil {
+				entry.breaker.RecordFailure()
+				c.callMetrics.Record(providerName, "failed", elapsed)
+				lastErr = err
+			} else {
+				entry.breaker.RecordSuccess()
+				c.callMetrics.Record(providerName, "success", elapsed)
+				logger.Info("force probe provider succeeded", "provider", providerName, "elapsed_ms", elapsed.Milliseconds())
+				return result, nil
+			}
+		}
+	}
+
 	// 所有 provider 均失败或熔断
+	logger.Error(
+		"fallback chain chat all providers failed",
+		"provider_count", len(c.entries),
+		"open_skipped", openSkipped,
+		"last_err", wrapLastErr(lastErr),
+	)
 	return "", fmt.Errorf("all LLM providers failed or circuit-opened: last_err=%w",
 		wrapLastErr(lastErr))
 }
@@ -128,6 +164,7 @@ func (c *FallbackChain) ChatWithHistoryStream(
 	messages []Message,
 	onChunk func(chunk string) error,
 ) error {
+	logger.Info("fallback chain stream start", "provider_count", len(c.entries), "message_count", len(messages))
 	for i, entry := range c.entries {
 		providerName := entry.provider.Name()
 
@@ -137,6 +174,7 @@ func (c *FallbackChain) ChatWithHistoryStream(
 		}
 
 		if err := entry.rateLimiter.Wait(ctx, estimateTokens(messages)); err != nil {
+			logger.Warn("stream rate limiter wait failed", "provider", providerName, "err", err)
 			continue
 		}
 
@@ -168,23 +206,30 @@ func (c *FallbackChain) ChatWithHistoryStream(
 		}
 		return nil
 	}
+	logger.Error("fallback chain stream all providers failed", "provider_count", len(c.entries))
 	return fmt.Errorf("all stream providers failed or circuit-opened")
 }
 
 // Embed 向量化（仅用主 provider，不跨 provider 降级）
 func (c *FallbackChain) Embed(ctx context.Context, text string) ([]float32, error) {
+	logger.Info("fallback chain embedding start", "provider_count", len(c.entries), "text_length", len(text))
 	for _, entry := range c.entries {
+		providerName := entry.provider.Name()
 		if !entry.breaker.Allow() {
+			logger.Warn("embedding breaker open, skipping provider", "provider", providerName)
 			continue
 		}
 		result, err := entry.provider.Embed(ctx, text)
 		if err != nil {
 			entry.breaker.RecordFailure()
+			logger.Warn("embedding provider failed", "provider", providerName, "err", err)
 			continue
 		}
 		entry.breaker.RecordSuccess()
+		logger.Info("embedding provider success", "provider", providerName, "dimension", len(result))
 		return result, nil
 	}
+	logger.Error("fallback chain embedding all providers failed", "provider_count", len(c.entries))
 	return nil, fmt.Errorf("all providers failed for embedding")
 }
 
@@ -233,26 +278,31 @@ func (c *FallbackChain) SupportsVision() bool {
 
 // ChatWithImages 降级链的 Vision 调用：优先选支持 Vision 的未熔断 provider
 func (c *FallbackChain) ChatWithImages(ctx context.Context, prompt string, images []string) (string, error) {
+	logger.Info("fallback chain vision start", "provider_count", len(c.entries), "prompt_length", len(prompt), "image_count", len(images))
 	for i, entry := range c.entries {
+		providerName := entry.provider.Name()
 		if !entry.breaker.Allow() {
+			logger.Warn("vision breaker open, skipping provider", "provider", providerName)
 			continue
 		}
 		if !entry.provider.SupportsVision() {
+			logger.Debug("vision unsupported provider skipped", "provider", providerName)
 			continue // 跳过不支持 Vision 的 provider
 		}
 		result, err := entry.provider.ChatWithImages(ctx, prompt, images)
 		if err != nil {
 			entry.breaker.RecordFailure()
 			logger.Warn("ChatWithImages failed, trying next vision provider",
-				"provider", entry.provider.Name(), "err", err)
+				"provider", providerName, "err", err)
 			continue
 		}
 		entry.breaker.RecordSuccess()
 		if i > 0 {
-			logger.Info("fallback vision provider used", "provider", entry.provider.Name())
+			logger.Info("fallback vision provider used", "provider", providerName)
 		}
 		return result, nil
 	}
 	// 全部 Vision provider 失败，降级为纯文本
+	logger.Warn("fallback chain vision fallback to text chat", "provider_count", len(c.entries))
 	return c.Chat(ctx, prompt)
 }

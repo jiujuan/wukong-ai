@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jiujuan/wukong-ai/internal/event"
@@ -41,6 +42,10 @@ func (h *StreamHandler) Handle(c *gin.Context) {
 	defer h.eventBus.Unsubscribe(taskID, sub)
 
 	clientGone := c.Request.Context().Done()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+	c.SSEvent("ping", `{"type":"ping"}`)
+	c.Writer.Flush()
 
 	// 流式响应
 	c.Stream(func(w io.Writer) bool {
@@ -48,6 +53,9 @@ func (h *StreamHandler) Handle(c *gin.Context) {
 		case <-clientGone:
 			logger.Debug("client disconnected", "task_id", taskID)
 			return false
+		case <-heartbeat.C:
+			c.SSEvent("ping", `{"type":"ping"}`)
+			return true
 		case event, ok := <-sub:
 			if !ok {
 				return false

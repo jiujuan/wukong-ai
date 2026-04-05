@@ -33,7 +33,12 @@ func (r *Reporter) Name() string {
 
 // Run 执行报告生成逻辑
 func (r *Reporter) Run(ctx *workflow.WukongContext) error {
-	logger.Info("Reporter running", "task_id", ctx.Config.TaskID)
+	logger.Info(
+		"Reporter running",
+		"task_id", ctx.Config.TaskID,
+		"sub_result_count", len(ctx.State.SubAgentResults),
+		"research_length", len(ctx.State.LastNodeOutput),
+	)
 
 	systemPrompt := prompts.LoadPrompt(r.promptDir, "reporter.txt")
 	if systemPrompt == "" {
@@ -72,11 +77,50 @@ Format the output as a well-structured markdown report.`
 		{Role: "user", Content: contextContent.String()},
 	}
 
-	response, err := r.llmProvider.ChatWithHistory(ctx.Context, messages)
-	if err != nil {
-		return err
+	streamProvider, ok := r.llmProvider.(llm.StreamLLM)
+	if ok {
+		var outputBuilder strings.Builder
+		err := streamProvider.ChatWithHistoryStream(ctx.Context, messages, func(chunk string) error {
+			if chunk == "" {
+				return nil
+			}
+			outputBuilder.WriteString(chunk)
+			ctx.State.SetLastNodeOutput(outputBuilder.String())
+			if ctx.EventBus != nil {
+				ctx.EventBus.Publish(ctx.Config.TaskID, workflow.ProgressEvent{
+					Type:   "sub_agent_update",
+					Node:   "reporter",
+					Status: "running",
+					Latest: chunk,
+				})
+			}
+			return nil
+		})
+		if err != nil {
+			logger.Error("Reporter stream call failed", "task_id", ctx.Config.TaskID, "err", err)
+			return err
+		}
+		response := strings.TrimSpace(outputBuilder.String())
+		ctx.State.SetLastNodeOutput(response)
+		ctx.State.SetFinalOutput(response)
+		logger.Info("Reporter completed", "task_id", ctx.Config.TaskID, "output_length", len(response))
+		return nil
 	}
 
+	response, err := r.llmProvider.ChatWithHistory(ctx.Context, messages)
+	if err != nil {
+		logger.Error("Reporter llm call failed", "task_id", ctx.Config.TaskID, "err", err)
+		return err
+	}
+	ctx.State.SetLastNodeOutput(response)
+	if ctx.EventBus != nil && response != "" {
+		ctx.EventBus.Publish(ctx.Config.TaskID, workflow.ProgressEvent{
+			Type:   "sub_agent_update",
+			Node:   "reporter",
+			Status: "running",
+			Latest: response,
+		})
+	}
 	ctx.State.SetFinalOutput(response)
 	logger.Info("Reporter completed", "task_id", ctx.Config.TaskID, "output_length", len(response))
 	return nil
@@ -85,6 +129,7 @@ Format the output as a well-structured markdown report.`
 // summarizeSubResults 当子任务结果较多时，用 summarize skill 先压缩
 func (r *Reporter) summarizeSubResults(ctx *workflow.WukongContext) string {
 	if len(ctx.State.SubAgentResults) == 0 {
+		logger.Info("Reporter no sub-results to summarize", "task_id", ctx.Config.TaskID)
 		return ""
 	}
 
@@ -94,6 +139,7 @@ func (r *Reporter) summarizeSubResults(ctx *workflow.WukongContext) string {
 		sb.WriteString(result + "\n\n")
 	}
 	combined := sb.String()
+	logger.Info("Reporter sub-results prepared", "task_id", ctx.Config.TaskID, "combined_len", len(combined))
 
 	// 超过 3000 字符时启用 summarize skill 压缩
 	if len(combined) > 3000 && r.skillRegistry != nil {
@@ -107,7 +153,7 @@ func (r *Reporter) summarizeSubResults(ctx *workflow.WukongContext) string {
 				)
 				return summary
 			}
-			logger.Warn("Reporter: summarize skill failed, using original", "err", err)
+			logger.Warn("Reporter: summarize skill failed, using original", "task_id", ctx.Config.TaskID, "err", err)
 		}
 	}
 	return combined
@@ -117,6 +163,7 @@ func (r *Reporter) summarizeSubResults(ctx *workflow.WukongContext) string {
 func (r *Reporter) summarizeResearch(ctx *workflow.WukongContext) string {
 	research := ctx.State.LastNodeOutput
 	if research == "" {
+		logger.Info("Reporter no research output to summarize", "task_id", ctx.Config.TaskID)
 		return ""
 	}
 	if len(research) > 3000 && r.skillRegistry != nil {
@@ -130,6 +177,7 @@ func (r *Reporter) summarizeResearch(ctx *workflow.WukongContext) string {
 				)
 				return summary
 			}
+			logger.Warn("Reporter: summarize research skill failed, using original", "task_id", ctx.Config.TaskID, "err", err)
 		}
 	}
 	return research

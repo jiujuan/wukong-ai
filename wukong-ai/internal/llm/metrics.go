@@ -3,6 +3,8 @@ package llm
 import (
 	"sync"
 	"time"
+
+	"github.com/jiujuan/wukong-ai/pkg/logger"
 )
 
 // ProviderMetrics 单个 provider 的调用统计
@@ -37,6 +39,7 @@ func (m *CallMetrics) Record(provider, status string, elapsed time.Duration) {
 	if !ok {
 		pm = &ProviderMetrics{}
 		m.metrics[provider] = pm
+		logger.Info("llm metrics provider initialized", "provider", provider)
 	}
 
 	pm.TotalCalls++
@@ -49,9 +52,11 @@ func (m *CallMetrics) Record(provider, status string, elapsed time.Duration) {
 		}
 	case "failed", "stream_failed":
 		pm.Failures++
+		logger.Warn("llm provider call failed recorded", "provider", provider, "status", status, "failures", pm.Failures, "total_calls", pm.TotalCalls)
 	case "skipped":
 		pm.Skipped++
 		pm.TotalCalls-- // 跳过不算调用
+		logger.Warn("llm provider call skipped recorded", "provider", provider, "skipped", pm.Skipped)
 	}
 }
 

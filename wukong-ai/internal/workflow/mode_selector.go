@@ -49,14 +49,12 @@ func ParseMode(modeStr string) (Mode, error) {
 // AutoSelectMode 根据配置自动选择模式
 func AutoSelectMode(cfg *RunConfig) Mode {
 	switch {
-	case !cfg.ThinkingEnabled && !cfg.PlanEnabled && !cfg.SubAgentEnabled:
-		return ModeFlash
-	case cfg.ThinkingEnabled && !cfg.PlanEnabled && !cfg.SubAgentEnabled:
-		return ModeStandard
-	case cfg.ThinkingEnabled && cfg.PlanEnabled && !cfg.SubAgentEnabled:
-		return ModePro
-	case cfg.ThinkingEnabled && cfg.PlanEnabled && cfg.SubAgentEnabled:
+	case cfg.SubAgentEnabled:
 		return ModeUltra
+	case cfg.PlanEnabled:
+		return ModePro
+	case cfg.ThinkingEnabled:
+		return ModeStandard
 	default:
 		return ModeFlash
 	}

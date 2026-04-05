@@ -32,7 +32,7 @@ func (p *Planner) Name() string {
 
 // Run 执行计划逻辑
 func (p *Planner) Run(ctx *workflow.WukongContext) error {
-	logger.Info("Planner running", "task_id", ctx.Config.TaskID)
+	logger.Info("Planner running", "task_id", ctx.Config.TaskID, "intention_length", len(ctx.State.Intention))
 
 	// 加载系统提示词
 	systemPrompt := prompts.LoadPrompt(p.promptDir, "planner.txt")
@@ -59,6 +59,7 @@ Respond with a JSON object containing:
 
 	response, err := p.llmProvider.ChatWithHistory(ctx.Context, messages)
 	if err != nil {
+		logger.Error("Planner llm call failed", "task_id", ctx.Config.TaskID, "err", err)
 		return err
 	}
 
@@ -66,12 +67,25 @@ Respond with a JSON object containing:
 	plan, tasks := p.parsePlanResponse(response)
 	ctx.State.SetPlan(plan)
 	ctx.State.SetTasks(tasks)
+	ctx.State.SetLastNodeOutput(plan)
+	if ctx.EventBus != nil && strings.TrimSpace(plan) != "" {
+		ctx.EventBus.Publish(ctx.Config.TaskID, workflow.ProgressEvent{
+			Type:   "sub_agent_update",
+			Node:   "planner",
+			Status: "running",
+			Latest: plan,
+		})
+	}
+	logger.Info("Planner state updated", "task_id", ctx.Config.TaskID, "plan_length", len(plan), "task_count", len(tasks))
 
 	// 保存任务列表到数据库
 	if len(tasks) > 0 {
-		tasksJSON, _ := json.Marshal(tasks)
+		tasksJSON, marshalErr := json.Marshal(tasks)
+		if marshalErr != nil {
+			logger.Warn("failed to marshal tasks list", "task_id", ctx.Config.TaskID, "err", marshalErr)
+		}
 		if err := repository.UpdateTasksList(ctx.Config.TaskID, tasksJSON); err != nil {
-			logger.Warn("failed to save tasks list", "err", err)
+			logger.Warn("failed to save tasks list", "task_id", ctx.Config.TaskID, "err", err)
 		}
 	}
 

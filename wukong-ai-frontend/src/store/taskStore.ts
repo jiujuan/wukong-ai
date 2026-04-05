@@ -41,10 +41,10 @@ interface TaskStore {
 
 // 计算模式
 const calculateMode = (config: { thinking: boolean; plan: boolean; subagent: boolean }) => {
-  if (!config.thinking && !config.plan && !config.subagent) return 'flash'
-  if (config.thinking && !config.plan && !config.subagent) return 'standard'
-  if (config.thinking && config.plan && !config.subagent) return 'pro'
-  return 'ultra'
+  if (config.subagent) return 'ultra'
+  if (config.plan) return 'pro'
+  if (config.thinking) return 'standard'
+  return 'flash'
 }
 
 export const useTaskStore = create<TaskStore>((set, get) => ({

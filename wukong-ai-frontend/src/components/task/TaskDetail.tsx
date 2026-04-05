@@ -17,6 +17,24 @@ interface TaskDetailProps {
  */
 export function TaskDetail({ task }: TaskDetailProps) {
   const { resumeTask, cancelTask, loading, events } = useTask()
+  const normalizeMultilineText = (input?: string) => {
+    if (!input) return ''
+    const raw = input.trim()
+    if (!raw) return ''
+    try {
+      if (raw.startsWith('"') && raw.endsWith('"')) {
+        const decoded = JSON.parse(raw)
+        if (typeof decoded === 'string') {
+          return decoded
+        }
+      }
+    } catch {
+    }
+    return raw
+      .replace(/\\r\\n/g, '\n')
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+  }
 
   const mode = calculateMode({
     thinking: task.mode === 'standard' || task.mode === 'pro' || task.mode === 'ultra',
@@ -64,12 +82,22 @@ export function TaskDetail({ task }: TaskDetailProps) {
       .map((event) => event.latest || '')
       .join('')
     : ''
+  const livePlannerOutput = events
+    .filter((event) => event.type === 'sub_agent_update' && event.node === 'planner' && !!event.latest)
+    .map((event) => event.latest || '')
+    .join('')
+  const liveReporterOutput = events
+    .filter((event) => event.type === 'sub_agent_update' && event.node === 'reporter' && !!event.latest)
+    .map((event) => event.latest || '')
+    .join('')
 
-  const isFlashRunning = task.mode === 'flash' && task.status === 'running'
+  const isTaskActive = task.status !== 'success' && task.status !== 'failed'
+  const isFlashRunning = task.mode === 'flash' && isTaskActive
   const isFlashCompleted = task.mode === 'flash' && task.status === 'success'
-  const resultContent = isFlashRunning
-    ? (liveFlashOutput || task.final_output || '')
-    : (task.final_output || liveFlashOutput)
+  const normalizedPlan = normalizeMultilineText(livePlannerOutput || task.plan || '')
+  const resultContent = task.mode === 'flash'
+    ? (isFlashRunning ? (liveFlashOutput || task.final_output || '') : (task.final_output || liveFlashOutput))
+    : (isTaskActive ? (liveReporterOutput || task.final_output || '') : (task.final_output || liveReporterOutput))
 
   return (
     <div className="space-y-6">
@@ -110,10 +138,10 @@ export function TaskDetail({ task }: TaskDetailProps) {
               <p className="text-sm text-gray-900">{task.intention}</p>
             </div>
           )}
-          {task.plan && (
+          {normalizedPlan && (
             <div className="md:col-span-2">
               <label className="mb-1 block text-sm text-gray-500">执行计划</label>
-              <p className="whitespace-pre-wrap text-sm text-gray-900">{task.plan}</p>
+              <p className="whitespace-pre-wrap text-sm text-gray-900">{normalizedPlan}</p>
             </div>
           )}
           <div className="flex items-center gap-4">
@@ -207,15 +235,15 @@ export function TaskDetail({ task }: TaskDetailProps) {
       {resultContent && (
         <TaskResultPanel
           content={resultContent}
-          title={task.mode === 'flash' && task.status === 'running' ? '实时回答' : '执行结果'}
+          title={isTaskActive ? '实时输出' : '执行结果'}
         />
       )}
 
-      {isFlashRunning && (
+      {isTaskActive && !resultContent && (
         <div className="rounded-lg border border-gray-200 bg-white p-6">
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
-            <span>正在获取回答... ...</span>
+            <span>正在获取实时输出...</span>
           </div>
         </div>
       )}
@@ -229,7 +257,7 @@ export function TaskDetail({ task }: TaskDetailProps) {
         </div>
       )}
 
-      {task.status === 'running' && task.mode !== 'flash' && <TaskProgressPanel />}
+      {isTaskActive && task.mode !== 'flash' && <TaskProgressPanel />}
     </div>
   )
 }

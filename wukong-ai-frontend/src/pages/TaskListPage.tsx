@@ -53,12 +53,9 @@ export function TaskListPage() {
   }
 
   // 运行成功回调
-  const handleRunSuccess = (_taskId: string) => {
+  const handleRunSuccess = (taskId: string) => {
     setShowRunForm(false)
-    if (isNewTaskPage) {
-      navigate('/tasks')
-    }
-    handleRefresh()
+    navigate(`/tasks/${taskId}`)
   }
 
   const statusOptions: { value: StatusFilter; label: string }[] = [

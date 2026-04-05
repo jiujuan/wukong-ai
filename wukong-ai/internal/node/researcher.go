@@ -34,7 +34,7 @@ func (r *Researcher) Name() string {
 
 // Run 执行研究逻辑
 func (r *Researcher) Run(ctx *workflow.WukongContext) error {
-	logger.Info("Researcher running", "task_id", ctx.Config.TaskID)
+	logger.Info("Researcher running", "task_id", ctx.Config.TaskID, "task_count", len(ctx.State.Tasks))
 
 	systemPrompt := prompts.LoadPrompt(r.promptDir, "researcher.txt")
 	if systemPrompt == "" {
@@ -76,6 +76,7 @@ Your role is to:
 
 	response, err := r.llmProvider.ChatWithHistory(ctx.Context, messages)
 	if err != nil {
+		logger.Error("Researcher llm call failed", "task_id", ctx.Config.TaskID, "err", err)
 		return err
 	}
 
@@ -87,6 +88,7 @@ Your role is to:
 // runToolsForTasks 对每个任务依次调用搜索工具，汇总所有结果
 func (r *Researcher) runToolsForTasks(ctx *workflow.WukongContext) string {
 	if r.toolRegistry == nil {
+		logger.Warn("Researcher tool registry is nil", "task_id", ctx.Config.TaskID)
 		return ""
 	}
 
@@ -99,6 +101,7 @@ func (r *Researcher) runToolsForTasks(ctx *workflow.WukongContext) string {
 		}
 	}
 	if searchTool == nil {
+		logger.Warn("Researcher no search tool available", "task_id", ctx.Config.TaskID)
 		return ""
 	}
 
@@ -107,6 +110,7 @@ func (r *Researcher) runToolsForTasks(ctx *workflow.WukongContext) string {
 	if len(queries) == 0 {
 		queries = []string{ctx.UserInput}
 	}
+	logger.Info("Researcher search planning", "task_id", ctx.Config.TaskID, "tool", searchTool.Name(), "query_count", len(queries))
 
 	var allResults strings.Builder
 	for i, query := range queries {
@@ -117,6 +121,9 @@ func (r *Researcher) runToolsForTasks(ctx *workflow.WukongContext) string {
 		}
 		allResults.WriteString(fmt.Sprintf("--- Search Result %d: %s ---\n%s\n\n", i+1, query, result))
 		logger.Info("Researcher search done", "task_id", ctx.Config.TaskID, "tool", searchTool.Name(), "query_index", i+1)
+	}
+	if allResults.Len() == 0 {
+		logger.Warn("Researcher search yielded no results", "task_id", ctx.Config.TaskID, "query_count", len(queries))
 	}
 	return allResults.String()
 }

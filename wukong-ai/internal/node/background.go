@@ -34,7 +34,7 @@ func (b *Background) Name() string {
 
 // Run 执行后台任务逻辑
 func (b *Background) Run(ctx *workflow.WukongContext) error {
-	logger.Info("Background running", "task_id", ctx.Config.TaskID)
+	logger.Info("Background running", "task_id", ctx.Config.TaskID, "intention_length", len(ctx.State.Intention))
 
 	// 加载系统提示词
 	systemPrompt := prompts.LoadPrompt(b.promptDir, "background.txt")
@@ -51,6 +51,7 @@ Provide a structured summary of background information.`
 
 	// ── Step 1：使用搜索工具补充背景资料 ────────────────────────
 	searchContext := b.runSearchTool(ctx)
+	logger.Info("Background search context prepared", "task_id", ctx.Config.TaskID, "search_context_length", len(searchContext))
 
 	// ── Step 2：携带搜索结果请求 LLM 分析 ───────────────────────
 	var userContent strings.Builder
@@ -68,6 +69,7 @@ Provide a structured summary of background information.`
 
 	response, err := b.llmProvider.ChatWithHistory(ctx.Context, messages)
 	if err != nil {
+		logger.Error("Background llm call failed", "task_id", ctx.Config.TaskID, "err", err)
 		return err
 	}
 
@@ -79,6 +81,7 @@ Provide a structured summary of background information.`
 // runSearchTool 调用可用的搜索工具获取背景资料
 func (b *Background) runSearchTool(ctx *workflow.WukongContext) string {
 	if b.toolRegistry == nil {
+		logger.Warn("Background tool registry is nil", "task_id", ctx.Config.TaskID)
 		return ""
 	}
 
@@ -90,6 +93,7 @@ func (b *Background) runSearchTool(ctx *workflow.WukongContext) string {
 			continue
 		}
 		query := fmt.Sprintf("%s background information", ctx.UserInput)
+		logger.Info("Background search started", "task_id", ctx.Config.TaskID, "tool", toolName, "query", query)
 		result, err := tool.Execute(ctx.Context, query)
 		if err != nil {
 			logger.Warn("Background search tool failed", "tool", toolName, "err", err)
@@ -98,5 +102,6 @@ func (b *Background) runSearchTool(ctx *workflow.WukongContext) string {
 		logger.Info("Background search completed", "task_id", ctx.Config.TaskID, "tool", toolName)
 		return result
 	}
+	logger.Warn("Background search skipped: no available search tool", "task_id", ctx.Config.TaskID)
 	return ""
 }

@@ -3,10 +3,25 @@ import { useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
+import type { ReactNode } from 'react'
 
 interface TaskResultPanelProps {
   content: string
   title?: string
+}
+
+function renderInlineBreaks(children: ReactNode): ReactNode {
+  if (typeof children === 'string') {
+    const parts = children.split(/<br\s*\/?>/gi)
+    if (parts.length === 1) {
+      return children
+    }
+    return parts.flatMap((part, index) => (index < parts.length - 1 ? [part, <br key={`br-${index}`} />] : [part]))
+  }
+  if (Array.isArray(children)) {
+    return children.map((child, index) => <span key={index}>{renderInlineBreaks(child)}</span>)
+  }
+  return children
 }
 
 const markdownComponents: Components = {
@@ -28,13 +43,23 @@ const markdownComponents: Components = {
   table: ({ children }) => <table className="min-w-full border-collapse text-sm text-gray-700">{children}</table>,
   thead: ({ children }) => <thead className="bg-gray-50">{children}</thead>,
   th: ({ children }) => <th className="border border-gray-200 px-3 py-2 text-left font-medium">{children}</th>,
-  td: ({ children }) => <td className="border border-gray-200 px-3 py-2 align-top">{children}</td>,
+  td: ({ children }) => <td className="border border-gray-200 px-3 py-2 align-top">{renderInlineBreaks(children)}</td>,
   pre: ({ children }) => <pre className="overflow-x-auto rounded-lg border border-gray-200 bg-gray-100 p-3 text-xs text-gray-700">{children}</pre>,
   code: ({ children }) => <code className="rounded bg-gray-100 px-1 py-0.5 text-xs text-gray-800">{children}</code>,
 }
 
 function normalizeStreamingMarkdown(content: string) {
-  const normalized = content
+  const normalizedBr = content
+    .split('\n')
+    .map((line) => {
+      if (line.includes('|')) {
+        return line
+      }
+      return line.replace(/<br\s*\/?>/gi, '\n')
+    })
+    .join('\n')
+
+  const normalized = normalizedBr
     .replace(/\r\n/g, '\n')
     .replace(/([。！？.!?:：\)])\s*(#{1,6}\s)/g, '$1\n$2')
   const fenceCount = (normalized.match(/```/g) || []).length

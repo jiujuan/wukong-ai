@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/jiujuan/wukong-ai/pkg/logger"
 )
 
 // TokenBucket 令牌桶（线程安全）
@@ -79,6 +81,7 @@ func NewRateLimiter(providerName string, maxRPM, maxTPM int) *LLMRateLimiter {
 	if maxTPM > 0 {
 		rl.tpmBucket = newTokenBucket(int64(maxTPM), int64(maxTPM))
 	}
+	logger.Info("rate limiter initialized", "provider", providerName, "enabled", rl.enabled, "max_rpm", maxRPM, "max_tpm", maxTPM)
 	return rl
 }
 
@@ -88,12 +91,15 @@ func (r *LLMRateLimiter) Wait(ctx context.Context, estimatedTokens int) error {
 	if !r.enabled {
 		return nil
 	}
+	logger.Debug("rate limiter wait start", "provider", r.providerName, "estimated_tokens", estimatedTokens)
 
 	// RPM 限流
 	if r.rpmBucket != nil {
 		if wait := r.rpmBucket.take(1); wait > 0 {
+			logger.Warn("rate limiter rpm throttled", "provider", r.providerName, "wait_ms", wait.Milliseconds())
 			select {
 			case <-ctx.Done():
+				logger.Warn("rate limiter rpm wait cancelled", "provider", r.providerName, "err", ctx.Err())
 				return fmt.Errorf("rate limit wait cancelled (RPM): %w", ctx.Err())
 			case <-time.After(wait):
 			}
@@ -103,14 +109,17 @@ func (r *LLMRateLimiter) Wait(ctx context.Context, estimatedTokens int) error {
 	// TPM 限流
 	if r.tpmBucket != nil && estimatedTokens > 0 {
 		if wait := r.tpmBucket.take(int64(estimatedTokens)); wait > 0 {
+			logger.Warn("rate limiter tpm throttled", "provider", r.providerName, "wait_ms", wait.Milliseconds(), "estimated_tokens", estimatedTokens)
 			select {
 			case <-ctx.Done():
+				logger.Warn("rate limiter tpm wait cancelled", "provider", r.providerName, "err", ctx.Err())
 				return fmt.Errorf("rate limit wait cancelled (TPM): %w", ctx.Err())
 			case <-time.After(wait):
 			}
 		}
 	}
 
+	logger.Debug("rate limiter wait done", "provider", r.providerName)
 	return nil
 }
 

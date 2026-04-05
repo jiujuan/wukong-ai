@@ -17,14 +17,22 @@ func NewFactory() *Factory {
 
 // CreateLLM 根据单个 LLMConfig 创建 LLM 实例（向前兼容）
 func (f *Factory) CreateLLM(cfg *config.LLMConfig) (LLM, error) {
+	logger.Info("create llm requested", "provider", cfg.Provider, "model", cfg.Model)
 	switch cfg.Provider {
 	case "openai":
-		return NewOpenAILLM(cfg), nil
+		llm := NewOpenAILLM(cfg)
+		logger.Info("create llm success", "provider", cfg.Provider, "model", cfg.Model)
+		return llm, nil
 	case "deepseek":
-		return NewDeepSeekLLM(cfg), nil
+		llm := NewDeepSeekLLM(cfg)
+		logger.Info("create llm success", "provider", cfg.Provider, "model", cfg.Model)
+		return llm, nil
 	case "ollama":
-		return NewOllamaLLM(cfg), nil
+		llm := NewOllamaLLM(cfg)
+		logger.Info("create llm success", "provider", cfg.Provider, "model", cfg.Model)
+		return llm, nil
 	default:
+		logger.Error("create llm failed: unsupported provider", "provider", cfg.Provider)
 		return nil, fmt.Errorf("unsupported LLM provider: %s", cfg.Provider)
 	}
 }
@@ -105,11 +113,14 @@ func (f *Factory) BuildFallbackChain(cfg *config.LLMConfig) (*FallbackChain, err
 
 // CreateEmbeddingLLM 创建专用于 embedding 的 LLM
 func (f *Factory) CreateEmbeddingLLM(cfg *config.LLMConfig) (LLM, error) {
+	logger.Info("create embedding llm requested", "provider", "openai", "embedding_model", cfg.EmbeddingModel, "embedding_dim", cfg.EmbeddingDim)
 	openaiCfg := &config.LLMConfig{
 		APIKey:         cfg.APIKey,
 		BaseURL:        "https://api.openai.com/v1",
 		EmbeddingModel: cfg.EmbeddingModel,
 		EmbeddingDim:   cfg.EmbeddingDim,
 	}
-	return NewOpenAILLM(openaiCfg), nil
+	llm := NewOpenAILLM(openaiCfg)
+	logger.Info("create embedding llm success", "provider", "openai", "embedding_model", cfg.EmbeddingModel)
+	return llm, nil
 }

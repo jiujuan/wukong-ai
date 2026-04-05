@@ -58,7 +58,15 @@ func (t *Translate) Execute(ctx context.Context, input string) (string, error) {
 		{Role: "user", Content: prompt},
 	}
 
-	return t.llmProvider.ChatWithHistory(ctx, messages)
+	result, err := t.llmProvider.ChatWithHistory(ctx, messages)
+	if err != nil {
+		return "", err
+	}
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return "", fmt.Errorf("translate: empty output")
+	}
+	return result, nil
 }
 
 // GetPrompt 获取系统提示词

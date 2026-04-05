@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -35,7 +36,7 @@ func NewSubAgent(llmProvider llm.LLM, promptDir string, toolRegistry *tools.Tool
 }
 
 // Execute 执行子代理任务：先用工具搜集资料，再交给 LLM 分析
-func (s *SubAgent) Execute(task *SubTask) (string, error) {
+func (s *SubAgent) Execute(ctx context.Context, task *SubTask) (string, error) {
 	logger.Debug("SubAgent executing", "task_id", task.TaskID, "index", task.Index)
 
 	systemPrompt := prompts.LoadPrompt(s.promptDir, "subagent.txt")
@@ -51,7 +52,7 @@ Execute the task and provide your results.`
 	}
 
 	// ── Step 1：搜索工具补充资料 ─────────────────────────────────
-	searchContext := s.runSearchTool(task)
+	searchContext := s.runSearchTool(ctx, task)
 
 	// ── Step 2：携带工具结果调用 LLM ─────────────────────────────
 	var userContent strings.Builder
@@ -65,7 +66,7 @@ Execute the task and provide your results.`
 		{Role: "user", Content: userContent.String()},
 	}
 
-	response, err := s.llmProvider.ChatWithHistory(nil, messages)
+	response, err := s.llmProvider.ChatWithHistory(ctx, messages)
 	if err != nil {
 		logger.Error("SubAgent LLM call failed", "task_id", task.TaskID, "index", task.Index, "err", err)
 		return "", err
@@ -76,7 +77,7 @@ Execute the task and provide your results.`
 }
 
 // runSearchTool 调用可用搜索工具为子任务补充信息
-func (s *SubAgent) runSearchTool(task *SubTask) string {
+func (s *SubAgent) runSearchTool(ctx context.Context, task *SubTask) string {
 	if s.toolRegistry == nil {
 		return ""
 	}
@@ -85,7 +86,7 @@ func (s *SubAgent) runSearchTool(task *SubTask) string {
 		if !ok {
 			continue
 		}
-		result, err := tool.Execute(nil, fmt.Sprintf("%s", task.Input))
+		result, err := tool.Execute(ctx, fmt.Sprintf("%s", task.Input))
 		if err != nil {
 			logger.Warn("SubAgent search failed", "tool", name, "task_id", task.TaskID, "err", err)
 			continue

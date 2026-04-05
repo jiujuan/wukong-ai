@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -30,6 +31,10 @@ func (s *Scheduler) RunAll(ctx *workflow.WukongContext, tasks []*SubTask, toolRe
 	}
 
 	logger.Info("Scheduler starting", "task_id", ctx.Config.TaskID, "task_count", len(tasks))
+	execCtx := ctx.Context
+	if execCtx == nil {
+		execCtx = context.Background()
+	}
 
 	results := make([]string, len(tasks))
 	var mu sync.Mutex
@@ -47,7 +52,7 @@ func (s *Scheduler) RunAll(ctx *workflow.WukongContext, tasks []*SubTask, toolRe
 
 			// 每个 SubAgent 共享同一个 toolRegistry（只读，线程安全）
 			agent := NewSubAgent(ctx.LLMProvider, ctx.Config.Mode.String(), toolRegistry)
-			result, err := agent.Execute(t)
+			result, err := agent.Execute(execCtx, t)
 
 			mu.Lock()
 			defer mu.Unlock()

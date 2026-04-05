@@ -2,9 +2,12 @@ package basic
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/jiujuan/wukong-ai/internal/llm"
 	"github.com/jiujuan/wukong-ai/internal/skills"
+	"github.com/jiujuan/wukong-ai/pkg/logger"
 )
 
 // QA 问答技能
@@ -31,18 +34,40 @@ func (q *QA) Description() string {
 
 // Execute 执行技能
 func (q *QA) Execute(ctx context.Context, input string) (string, error) {
-	prompt := `Answer the following question based on the provided context:
+	cleanInput := strings.TrimSpace(input)
+	if cleanInput == "" {
+		return "", fmt.Errorf("qa: empty input")
+	}
+	logger.Info("qa skill start", "input_length", len(cleanInput))
 
-"""` + input + `"""
+	prompt := `Please answer the user's question directly and clearly.
 
-Provide a clear and accurate answer. If the answer cannot be determined from the context, say so.`
+If the input includes explicit context, prioritize that context.
+If no explicit context is provided, answer with your general knowledge.
+
+User input:
+
+"""` + cleanInput + `"""
+
+Return only the final answer.`
 
 	messages := []llm.Message{
-		{Role: "system", Content: "You are a helpful assistant that answers questions based on the provided context."},
+		{Role: "system", Content: "You are a helpful assistant. Provide accurate, concise, and directly useful answers."},
 		{Role: "user", Content: prompt},
 	}
 
-	return q.llmProvider.ChatWithHistory(ctx, messages)
+	result, err := q.llmProvider.ChatWithHistory(ctx, messages)
+	if err != nil {
+		logger.Warn("qa skill llm call failed", "err", err)
+		return "", err
+	}
+	result = strings.TrimSpace(result)
+	if result == "" {
+		logger.Warn("qa skill empty output")
+		return "", fmt.Errorf("qa: empty output")
+	}
+	logger.Info("qa skill completed", "output_length", len(result))
+	return result, nil
 }
 
 // GetPrompt 获取系统提示词

@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jiujuan/wukong-ai/pkg/config"
+	"github.com/jiujuan/wukong-ai/pkg/llmstream"
 	"github.com/jiujuan/wukong-ai/pkg/logger"
 )
 
@@ -34,13 +34,15 @@ func NewOllamaLLM(cfg *config.LLMConfig) *OllamaLLM {
 	if model == "" {
 		model = "llama2"
 	}
-	return &OllamaLLM{
+	llm := &OllamaLLM{
 		baseURL: baseURL,
 		model:   model,
 		client: &http.Client{
 			Timeout: 300 * time.Second, // Ollama 可能需要更长时间
 		},
 	}
+	logger.Info("ollama llm initialized", "base_url", llm.baseURL, "model", llm.model)
+	return llm
 }
 
 // Name 返回提供者名称
@@ -58,6 +60,7 @@ func (o *OllamaLLM) Chat(ctx context.Context, prompt string) (string, error) {
 
 // ChatWithHistory 发送带历史的对话请求
 func (o *OllamaLLM) ChatWithHistory(ctx context.Context, messages []Message) (string, error) {
+	logger.Info("ollama chat start", "model", o.model, "message_count", len(messages))
 	reqBody := map[string]any{
 		"model":  o.model,
 		"stream": false,
@@ -75,12 +78,14 @@ func (o *OllamaLLM) ChatWithHistory(ctx context.Context, messages []Message) (st
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
+		logger.Error("ollama chat marshal request failed", "model", o.model, "err", err)
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/api/chat", o.baseURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
+		logger.Error("ollama chat create request failed", "model", o.model, "err", err)
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -88,16 +93,19 @@ func (o *OllamaLLM) ChatWithHistory(ctx context.Context, messages []Message) (st
 
 	resp, err := o.client.Do(req)
 	if err != nil {
+		logger.Error("ollama chat http call failed", "model", o.model, "err", err)
 		return "", fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		logger.Error("ollama chat read response failed", "model", o.model, "status", resp.StatusCode, "err", err)
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		logger.Error("ollama chat api error", "model", o.model, "status", resp.StatusCode, "response_length", len(respBody))
 		return "", formatOllamaAPIError("Ollama API error", resp.StatusCode, respBody)
 	}
 
@@ -108,6 +116,7 @@ func (o *OllamaLLM) ChatWithHistory(ctx context.Context, messages []Message) (st
 	}
 
 	if err := json.Unmarshal(respBody, &result); err != nil {
+		logger.Error("ollama chat unmarshal response failed", "model", o.model, "err", err)
 		return "", fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
@@ -116,6 +125,7 @@ func (o *OllamaLLM) ChatWithHistory(ctx context.Context, messages []Message) (st
 }
 
 func (o *OllamaLLM) ChatWithHistoryStream(ctx context.Context, messages []Message, onChunk func(chunk string) error) error {
+	logger.Info("ollama stream chat start", "model", o.model, "message_count", len(messages))
 	reqBody := map[string]any{
 		"model":  o.model,
 		"stream": true,
@@ -133,70 +143,30 @@ func (o *OllamaLLM) ChatWithHistoryStream(ctx context.Context, messages []Messag
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
+		logger.Error("ollama stream marshal request failed", "model", o.model, "err", err)
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/api/chat", o.baseURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
+		logger.Error("ollama stream create request failed", "model", o.model, "err", err)
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := o.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("ollama stream api error: status=%d", resp.StatusCode)
-		}
-		return formatOllamaAPIError("Ollama API error", resp.StatusCode, respBody)
+	if err := llmstream.Stream(o.client, req, onChunk, llmstream.ParseOllamaChunk); err != nil {
+		logger.Error("ollama stream failed", "model", o.model, "err", err)
+		return err
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		var chunk struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-			Done bool `json:"done"`
-		}
-		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			return fmt.Errorf("failed to parse stream chunk: %w", err)
-		}
-
-		if chunk.Message.Content != "" && onChunk != nil {
-			if err := onChunk(chunk.Message.Content); err != nil {
-				return err
-			}
-		}
-
-		if chunk.Done {
-			break
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("stream read error: %w", err)
-	}
-
+	logger.Info("ollama stream chat completed", "model", o.model)
 	return nil
 }
 
 // Embed 生成文本向量 (Ollama 支持 embedding)
 func (o *OllamaLLM) Embed(ctx context.Context, text string) ([]float32, error) {
+	logger.Info("ollama embedding start", "model", o.model, "text_length", len(text))
 	reqBody := map[string]any{
 		"model": o.model,
 		"input": text,
@@ -204,12 +174,14 @@ func (o *OllamaLLM) Embed(ctx context.Context, text string) ([]float32, error) {
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
+		logger.Error("ollama embedding marshal request failed", "model", o.model, "err", err)
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/api/embeddings", o.baseURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
+		logger.Error("ollama embedding create request failed", "model", o.model, "err", err)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -217,16 +189,19 @@ func (o *OllamaLLM) Embed(ctx context.Context, text string) ([]float32, error) {
 
 	resp, err := o.client.Do(req)
 	if err != nil {
+		logger.Error("ollama embedding http call failed", "model", o.model, "err", err)
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		logger.Error("ollama embedding read response failed", "model", o.model, "status", resp.StatusCode, "err", err)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		logger.Error("ollama embedding api error", "model", o.model, "status", resp.StatusCode, "response_length", len(respBody))
 		return nil, formatOllamaAPIError("Ollama Embedding API error", resp.StatusCode, respBody)
 	}
 
@@ -235,9 +210,11 @@ func (o *OllamaLLM) Embed(ctx context.Context, text string) ([]float32, error) {
 	}
 
 	if err := json.Unmarshal(respBody, &result); err != nil {
+		logger.Error("ollama embedding unmarshal response failed", "model", o.model, "err", err)
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
+	logger.Info("ollama embedding completed", "model", o.model, "dimension", len(result.Embedding))
 	return result.Embedding, nil
 }
 
@@ -266,7 +243,9 @@ func (o *OllamaLLM) SupportsVision() bool {
 
 // ChatWithImages Ollama Vision 调用（使用 /api/generate 接口的 images 字段）
 func (o *OllamaLLM) ChatWithImages(ctx context.Context, prompt string, images []string) (string, error) {
+	logger.Info("ollama vision chat start", "model", o.model, "prompt_length", len(prompt), "image_count", len(images))
 	if !o.SupportsVision() {
+		logger.Warn("ollama vision unsupported model, fallback to text chat", "model", o.model)
 		return o.Chat(ctx, prompt)
 	}
 
@@ -278,24 +257,28 @@ func (o *OllamaLLM) ChatWithImages(ctx context.Context, prompt string, images []
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
+		logger.Error("ollama vision marshal request failed", "model", o.model, "err", err)
 		return "", fmt.Errorf("OllamaLLM ChatWithImages marshal: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/api/generate", o.baseURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
+		logger.Error("ollama vision create request failed", "model", o.model, "err", err)
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := o.client.Do(req)
 	if err != nil {
+		logger.Error("ollama vision http call failed", "model", o.model, "err", err)
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		logger.Error("ollama vision api error", "model", o.model, "status", resp.StatusCode, "response_length", len(respBody))
 		return "", fmt.Errorf("Ollama Vision error: status=%d", resp.StatusCode)
 	}
 
@@ -303,7 +286,9 @@ func (o *OllamaLLM) ChatWithImages(ctx context.Context, prompt string, images []
 		Response string `json:"response"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
+		logger.Error("ollama vision parse response failed", "model", o.model, "err", err)
 		return "", fmt.Errorf("Ollama Vision parse error: %w", err)
 	}
+	logger.Info("ollama vision chat completed", "model", o.model, "content_length", len(result.Response))
 	return result.Response, nil
 }
