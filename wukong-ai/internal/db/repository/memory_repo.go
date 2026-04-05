@@ -148,3 +148,56 @@ func DeleteMemoriesByTaskID(taskID string) error {
 	}
 	return nil
 }
+
+// SaveMemoryWithAttachment 保存附件关联的 memory 记录（含 attachment_id 和 chunk_index）
+func SaveMemoryWithAttachment(memory *Memory, attachmentID int64, chunkIndex int) (int64, error) {
+	db := db.Get()
+	query := `
+		INSERT INTO memories (
+			task_id, session_id, content, embedding, memory_type,
+			metadata, attachment_id, chunk_index, create_time
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+		RETURNING id
+	`
+	var id int64
+	err := db.QueryRow(query,
+		memory.TaskID, memory.SessionID, memory.Content,
+		memory.Embedding, memory.MemoryType, memory.Metadata,
+		attachmentID, chunkIndex,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("failed to save attachment memory: %w", err)
+	}
+	return id, nil
+}
+
+// SearchAttachmentMemories 检索任务附件相关的向量记忆（memory_type='attachment'）
+func SearchAttachmentMemories(embedding pgvector.Vector, taskID string, topK int) ([]*Memory, error) {
+	db := db.Get()
+	query := `
+		SELECT id, task_id, session_id, content, embedding, memory_type, metadata, create_time
+		FROM memories
+		WHERE memory_type = 'attachment'
+		  AND ($1 = '' OR task_id = $1)
+		ORDER BY embedding <=> $2
+		LIMIT $3
+	`
+	rows, err := db.Query(query, taskID, embedding, topK)
+	if err != nil {
+		return nil, fmt.Errorf("SearchAttachmentMemories: %w", err)
+	}
+	defer rows.Close()
+
+	var memories []*Memory
+	for rows.Next() {
+		m := &Memory{}
+		var metadata []byte
+		if err := rows.Scan(&m.ID, &m.TaskID, &m.SessionID, &m.Content,
+			&m.Embedding, &m.MemoryType, &metadata, &m.CreateTime); err != nil {
+			return nil, err
+		}
+		m.Metadata = metadata
+		memories = append(memories, m)
+	}
+	return memories, nil
+}
