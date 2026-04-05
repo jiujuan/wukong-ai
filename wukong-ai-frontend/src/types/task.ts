@@ -24,6 +24,8 @@ export interface TaskDetail {
 // 运行任务请求
 export interface RunTaskRequest {
   user_input: string
+  intention?: string
+  conversation_id?: string
   thinking_enabled?: boolean
   plan_enabled?: boolean
   subagent_enabled?: boolean
@@ -38,6 +40,7 @@ export interface RunTaskResponse {
   status: TaskStatus
   mode: TaskMode
   stream_url?: string
+  conversation_id?: string
   create_time: string
 }
 

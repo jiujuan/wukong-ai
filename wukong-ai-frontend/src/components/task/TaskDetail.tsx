@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskResultPanel } from './TaskResultPanel'
 import { TaskProgressPanel } from './TaskProgressPanel'
+import { TaskConversationPanel } from './TaskConversationPanel'
 import { useTask } from '@/hooks'
 import type { TaskDetail as TaskDetailType } from '@/types'
 import { calculateMode } from '@/store'
@@ -263,6 +264,8 @@ export function TaskDetail({ task }: TaskDetailProps) {
           </CardContent>
         </Card>
       )}
+
+      <TaskConversationPanel task={task} />
 
       {isTaskActive && task.mode !== 'flash' && <TaskProgressPanel />}
     </div>

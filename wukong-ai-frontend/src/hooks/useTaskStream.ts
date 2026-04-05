@@ -8,15 +8,17 @@ interface UseTaskStreamOptions {
   enabled?: boolean
   onNodeStatusChange?: (nodeId: string, status: string) => void
   onTaskComplete?: () => void
+  onEvent?: (event: ProgressEvent) => void
 }
 
 /**
  * 任务流 Hook - 处理 SSE 事件
  */
-export function useTaskStream({ taskId, enabled = true, onNodeStatusChange, onTaskComplete }: UseTaskStreamOptions) {
+export function useTaskStream({ taskId, enabled = true, onNodeStatusChange, onTaskComplete, onEvent }: UseTaskStreamOptions) {
   const eventSourceRef = useRef<EventSource | null>(null)
   const onNodeStatusChangeRef = useRef<typeof onNodeStatusChange>(onNodeStatusChange)
   const onTaskCompleteRef = useRef<typeof onTaskComplete>(onTaskComplete)
+  const onEventRef = useRef<typeof onEvent>(onEvent)
   const addEvent = useTaskStore((state) => state.addEvent)
   const updateNodeStatus = useDagStore((state) => state.updateNodeStatus)
   const setSseConnected = useDagStore((state) => state.setSseConnected)
@@ -28,6 +30,10 @@ export function useTaskStream({ taskId, enabled = true, onNodeStatusChange, onTa
   useEffect(() => {
     onTaskCompleteRef.current = onTaskComplete
   }, [onTaskComplete])
+
+  useEffect(() => {
+    onEventRef.current = onEvent
+  }, [onEvent])
 
   const connect = useCallback(() => {
     if (!enabled || eventSourceRef.current) return
@@ -47,6 +53,7 @@ export function useTaskStream({ taskId, enabled = true, onNodeStatusChange, onTa
         const data: ProgressEvent =
           typeof parsed === 'string' ? JSON.parse(parsed) : parsed
         addEvent(data)
+        onEventRef.current?.(data)
 
         const nodeId = data.node
         if (nodeId) {
