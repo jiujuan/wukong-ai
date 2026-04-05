@@ -220,3 +220,39 @@ func wrapLastErr(err error) error {
 	}
 	return err
 }
+
+// SupportsVision 返回第一个未熔断 provider 的 Vision 支持状态
+func (c *FallbackChain) SupportsVision() bool {
+	for _, e := range c.entries {
+		if e.breaker.Allow() {
+			return e.provider.SupportsVision()
+		}
+	}
+	return false
+}
+
+// ChatWithImages 降级链的 Vision 调用：优先选支持 Vision 的未熔断 provider
+func (c *FallbackChain) ChatWithImages(ctx context.Context, prompt string, images []string) (string, error) {
+	for i, entry := range c.entries {
+		if !entry.breaker.Allow() {
+			continue
+		}
+		if !entry.provider.SupportsVision() {
+			continue // 跳过不支持 Vision 的 provider
+		}
+		result, err := entry.provider.ChatWithImages(ctx, prompt, images)
+		if err != nil {
+			entry.breaker.RecordFailure()
+			logger.Warn("ChatWithImages failed, trying next vision provider",
+				"provider", entry.provider.Name(), "err", err)
+			continue
+		}
+		entry.breaker.RecordSuccess()
+		if i > 0 {
+			logger.Info("fallback vision provider used", "provider", entry.provider.Name())
+		}
+		return result, nil
+	}
+	// 全部 Vision provider 失败，降级为纯文本
+	return c.Chat(ctx, prompt)
+}
