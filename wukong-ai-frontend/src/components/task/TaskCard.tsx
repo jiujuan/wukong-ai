@@ -1,9 +1,10 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
-import { Clock, ArrowRight, User, Zap, Brain, Map, Users } from 'lucide-react'
+import { Clock, ArrowRight, Zap, Brain, Map, Users } from 'lucide-react'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import type { TaskListItem } from '@/types'
 import { calculateMode } from '@/store'
+import { Badge, Card, CardContent } from '@/components/ui'
 
 interface TaskCardProps {
   task: TaskListItem
@@ -49,37 +50,33 @@ export function TaskCard({ task }: TaskCardProps) {
   }
 
   return (
-    <Link
-      to={`/tasks/${task.task_id}`}
-      className="block rounded-lg border border-gray-200 bg-white p-4 transition-shadow hover:shadow-md"
-    >
-      {/* 头部 */}
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <TaskStatusBadge status={task.status} />
-          <span className="flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
-            {modeIcons[mode]}
-            {modeLabels[mode]}
-          </span>
-        </div>
-        <ArrowRight className="h-4 w-4 text-gray-400" />
-      </div>
-
-      {/* 内容 */}
-      <p className="mb-3 text-sm text-gray-900">{truncateText(task.user_input)}</p>
-
-      {/* 元信息 */}
-      <div className="flex items-center justify-between text-xs text-gray-500">
-        <div className="flex items-center gap-1">
-          <Clock className="h-3 w-3" />
-          {formatTime(task.create_time)}
-        </div>
-        {task.finish_time && (
-          <span>
-            耗时: {Math.round((new Date(task.finish_time).getTime() - new Date(task.create_time).getTime()) / 1000)}s
-          </span>
-        )}
-      </div>
+    <Link to={`/tasks/${task.task_id}`} className="block">
+      <Card className="transition-colors hover:border-primary/30">
+        <CardContent className="p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <TaskStatusBadge status={task.status} />
+              <Badge variant="secondary" className="gap-1">
+                {modeIcons[mode]}
+                {modeLabels[mode]}
+              </Badge>
+            </div>
+            <ArrowRight className="h-4 w-4 text-muted-foreground" />
+          </div>
+          <p className="mb-3 text-sm text-foreground">{truncateText(task.user_input)}</p>
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <div className="flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              {formatTime(task.create_time)}
+            </div>
+            {task.finish_time && (
+              <span>
+                耗时: {Math.round((new Date(task.finish_time).getTime() - new Date(task.create_time).getTime()) / 1000)}s
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </Link>
   )
 }

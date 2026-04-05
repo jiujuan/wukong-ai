@@ -12,16 +12,10 @@ interface AppLayoutProps {
  */
 export function AppLayout({ children }: AppLayoutProps) {
   return (
-    <div className="flex h-screen bg-gray-50">
-      {/* 侧边栏 */}
+    <div className="flex h-screen bg-background">
       <Sidebar />
-
-      {/* 主内容区 */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* 头部 */}
         <Header />
-
-        {/* 内容 */}
         <main className="flex-1 overflow-auto p-6">
           {children || <Outlet />}
         </main>

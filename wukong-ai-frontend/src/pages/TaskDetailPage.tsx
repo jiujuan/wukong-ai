@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { LoadingSpinner, ErrorAlert } from '@/components/common'
 import { TaskDetail } from '@/components/task'
 import { useTask, useTaskStream } from '@/hooks'
+import { Button } from '@/components/ui'
 
 /**
  * 任务详情页面
@@ -49,12 +50,12 @@ export function TaskDetailPage() {
           message={currentTaskError}
           onDismiss={() => navigate('/tasks')}
         />
-        <button
+        <Button
+          variant="outline"
           onClick={() => navigate('/tasks')}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
         >
           返回列表
-        </button>
+        </Button>
       </div>
     )
   }
@@ -63,13 +64,13 @@ export function TaskDetailPage() {
   if (!currentTask) {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-4">
-        <p className="text-gray-500">未找到任务</p>
-        <button
+        <p className="text-muted-foreground">未找到任务</p>
+        <Button
+          variant="outline"
           onClick={() => navigate('/tasks')}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
         >
           返回列表
-        </button>
+        </Button>
       </div>
     )
   }

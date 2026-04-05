@@ -1,5 +1,6 @@
 import React from 'react'
 import { AlertCircle, X } from 'lucide-react'
+import { Alert, AlertDescription, AlertTitle, Button } from '@/components/ui'
 
 interface ErrorAlertProps {
   message: string
@@ -11,20 +12,22 @@ interface ErrorAlertProps {
  */
 export function ErrorAlert({ message, onDismiss }: ErrorAlertProps) {
   return (
-    <div className="flex items-start gap-3 rounded-lg bg-red-50 p-4">
-      <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-500" />
+    <Alert variant="destructive" className="flex items-start gap-3">
+      <AlertCircle className="h-5 w-5 flex-shrink-0" />
       <div className="flex-1">
-        <h4 className="text-sm font-medium text-red-800">错误</h4>
-        <p className="mt-1 text-sm text-red-700">{message}</p>
+        <AlertTitle>错误</AlertTitle>
+        <AlertDescription>{message}</AlertDescription>
       </div>
       {onDismiss && (
-        <button
+        <Button
           onClick={onDismiss}
-          className="text-red-500 hover:text-red-700"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-destructive hover:text-destructive"
         >
           <X className="h-5 w-5" />
-        </button>
+        </Button>
       )}
-    </div>
+    </Alert>
   )
 }

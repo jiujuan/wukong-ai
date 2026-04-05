@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
 import type { ReactNode } from 'react'
+import { Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui'
 
 interface TaskResultPanelProps {
   content: string
@@ -91,16 +92,17 @@ export function TaskResultPanel({ content, title = '执行结果' }: TaskResultP
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white">
-      {/* 头部 */}
-      <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0 border-b">
         <div className="flex items-center gap-2">
-          <CheckCircle2 className="h-5 w-5 text-green-500" />
-          <h3 className="font-medium text-gray-900">{title}</h3>
+          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+          <CardTitle className="text-base">{title}</CardTitle>
         </div>
-        <button
+        <Button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+          variant="ghost"
+          size="sm"
+          className="gap-1.5"
         >
           {copied ? (
             <>
@@ -113,17 +115,15 @@ export function TaskResultPanel({ content, title = '执行结果' }: TaskResultP
               复制
             </>
           )}
-        </button>
-      </div>
-
-      {/* 内容 */}
-      <div className="p-6">
+        </Button>
+      </CardHeader>
+      <CardContent className="p-6">
         <div className="space-y-1 break-words">
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
             {renderedContent}
           </ReactMarkdown>
         </div>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   )
 }

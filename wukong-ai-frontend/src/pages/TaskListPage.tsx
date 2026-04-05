@@ -3,9 +3,9 @@ import { Plus, Filter, RefreshCw } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { TaskCard } from '@/components/task'
 import { TaskRunForm } from '@/components/task'
-import { ModeSelector } from '@/components/mode'
 import { LoadingSpinner, EmptyState } from '@/components/common'
 import { useTaskList } from '@/hooks'
+import { Button } from '@/components/ui'
 
 type StatusFilter = 'all' | 'pending' | 'queued' | 'running' | 'success' | 'failed'
 
@@ -16,7 +16,6 @@ export function TaskListPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const isNewTaskPage = location.pathname === '/tasks/new'
-  const [showRunForm, setShowRunForm] = useState(isNewTaskPage)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
 
   const {
@@ -34,12 +33,10 @@ export function TaskListPage() {
 
   // 加载任务列表
   useEffect(() => {
-    loadTasks(1, statusFilter === 'all' ? undefined : statusFilter)
+    if (!isNewTaskPage) {
+      loadTasks(1, statusFilter === 'all' ? undefined : statusFilter)
+    }
   }, [])
-
-  useEffect(() => {
-    setShowRunForm(isNewTaskPage)
-  }, [isNewTaskPage])
 
   // 刷新
   const handleRefresh = () => {
@@ -54,7 +51,6 @@ export function TaskListPage() {
 
   // 运行成功回调
   const handleRunSuccess = (taskId: string) => {
-    setShowRunForm(false)
     navigate(`/tasks/${taskId}`)
   }
 
@@ -67,72 +63,70 @@ export function TaskListPage() {
     { value: 'failed', label: '失败' },
   ]
 
+  if (isNewTaskPage) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center">
+        <div className="w-full max-w-3xl">
+          <TaskRunForm onSuccess={handleRunSuccess} />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       {/* 头部 */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">任务管理</h2>
-          <p className="mt-1 text-sm text-gray-500">
+          <h2 className="text-xl font-semibold text-foreground">任务管理</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
             共 {total} 个任务
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button
+          <Button
             onClick={handleRefresh}
             disabled={loading}
-            className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            variant="outline"
+            className="gap-2"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             刷新
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={() => navigate(isNewTaskPage ? '/tasks' : '/tasks/new')}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+            className="gap-2"
           >
             <Plus className="h-4 w-4" />
             {isNewTaskPage ? '收起新建' : '新建任务'}
-          </button>
+          </Button>
         </div>
       </div>
 
-      {/* 新建任务表单 */}
-      {showRunForm && (
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2">
-            <div className="rounded-lg border border-gray-200 bg-white p-6">
-              <TaskRunForm onSuccess={handleRunSuccess} />
-            </div>
-          </div>
-          <div>
-            <ModeSelector />
-          </div>
-        </div>
-      )}
-
       {/* 筛选 */}
       <div className="flex items-center gap-2">
-        <Filter className="h-4 w-4 text-gray-400" />
+        <Filter className="h-4 w-4 text-muted-foreground" />
         <div className="flex gap-2">
           {statusOptions.map((option) => (
-            <button
+            <Button
               key={option.value}
               onClick={() => handleStatusFilter(option.value)}
-              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+              variant={statusFilter === option.value ? 'secondary' : 'ghost'}
+              className={`h-8 px-3 py-1.5 text-sm font-medium ${
                 statusFilter === option.value
-                  ? 'bg-indigo-100 text-indigo-700'
-                  : 'text-gray-600 hover:bg-gray-100'
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-muted-foreground'
               }`}
             >
               {option.label}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
 
       {/* 错误 */}
       {error && (
-        <div className="rounded-lg bg-red-50 p-4 text-sm text-red-600">
+        <div className="rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
           {error}
         </div>
       )}
@@ -147,12 +141,12 @@ export function TaskListPage() {
           title="暂无任务"
           description="创建您的第一个任务，开始使用悟空 AI"
           action={
-            <button
+            <Button
               onClick={() => navigate('/tasks/new')}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+              size="sm"
             >
               创建任务
-            </button>
+            </Button>
           }
         />
       ) : (
@@ -167,24 +161,26 @@ export function TaskListPage() {
           {/* 分页 */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between">
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-muted-foreground">
                 第 {currentPage} / {totalPages} 页，共 {total} 条
               </p>
               <div className="flex gap-2">
-                <button
+                <Button
                   onClick={() => goToPage(currentPage - 1)}
                   disabled={currentPage <= 1}
-                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  variant="outline"
+                  size="sm"
                 >
                   上一页
-                </button>
-                <button
+                </Button>
+                <Button
                   onClick={() => goToPage(currentPage + 1)}
                   disabled={currentPage >= totalPages}
-                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  variant="outline"
+                  size="sm"
                 >
                   下一页
-                </button>
+                </Button>
               </div>
             </div>
           )}

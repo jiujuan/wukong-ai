@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react'
 import { DagGraph } from '@/components/dag'
 import { LoadingSpinner, ErrorAlert } from '@/components/common'
 import { useDag, useTask, useTaskList, useTaskStream } from '@/hooks'
+import { Button, Card, CardContent, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui'
 
 /**
  * DAG 视图页面
@@ -55,27 +56,30 @@ export function DagViewPage() {
   if (error) {
     return (
       <div className="space-y-4">
-        <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-4">
-          <span className="text-sm text-gray-600">切换任务：</span>
-          <select
-            value={taskId}
-            onChange={(event) => setSearchParams({ task_id: event.target.value })}
-            className="min-w-[320px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-indigo-500"
-          >
-            {tasks.map((task) => (
-              <option key={task.task_id} value={task.task_id}>
-                {task.task_id} ｜ {task.status} ｜ {task.mode}
-              </option>
-            ))}
-          </select>
-        </div>
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground">切换任务：</span>
+            <Select value={taskId} onValueChange={(value) => setSearchParams({ task_id: value })}>
+              <SelectTrigger className="min-w-[320px]">
+                <SelectValue placeholder="请选择任务" />
+              </SelectTrigger>
+              <SelectContent>
+                {tasks.map((task) => (
+                  <SelectItem key={task.task_id} value={task.task_id}>
+                    {task.task_id} ｜ {task.status} ｜ {task.mode}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </Card>
         <ErrorAlert message={error} />
-        <button
+        <Button
+          variant="outline"
           onClick={() => navigate('/tasks')}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
         >
           返回列表
-        </button>
+        </Button>
       </div>
     )
   }
@@ -91,13 +95,13 @@ export function DagViewPage() {
   if (tasks.length === 0 && !taskListLoading) {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-4">
-        <p className="text-gray-500">暂无任务，创建任务后可在此查看 DAG 视图</p>
-        <button
+        <p className="text-muted-foreground">暂无任务，创建任务后可在此查看 DAG 视图</p>
+        <Button
+          variant="outline"
           onClick={() => navigate('/tasks')}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
         >
           前往任务管理
-        </button>
+        </Button>
       </div>
     )
   }
@@ -113,34 +117,36 @@ export function DagViewPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-4">
-        <button
+        <Button
+          variant="outline"
+          size="icon"
           onClick={() => navigate(`/tasks/${taskId}`)}
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
         >
           <ArrowLeft className="h-4 w-4" />
-        </button>
+        </Button>
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">工作流执行图</h2>
-          <p className="text-sm text-gray-500">任务 ID: {taskId}</p>
+          <h2 className="text-lg font-semibold text-foreground">工作流执行图</h2>
+          <p className="text-sm text-muted-foreground">任务 ID: {taskId}</p>
         </div>
       </div>
 
-      <div className="rounded-lg border border-gray-200 bg-white p-4">
+      <Card className="p-4">
         <div className="flex flex-col gap-2 md:flex-row md:items-center">
-          <span className="text-sm text-gray-600">选择任务</span>
-          <select
-            value={taskId}
-            onChange={(event) => setSearchParams({ task_id: event.target.value })}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-indigo-500 md:min-w-[520px]"
-          >
-            {tasks.map((task) => (
-              <option key={task.task_id} value={task.task_id}>
-                {task.task_id} ｜ {task.status} ｜ {task.mode} ｜ {task.user_input.slice(0, 24)}
-              </option>
-            ))}
-          </select>
+          <span className="text-sm text-muted-foreground">选择任务</span>
+          <Select value={taskId} onValueChange={(value) => setSearchParams({ task_id: value })}>
+            <SelectTrigger className="md:min-w-[520px]">
+              <SelectValue placeholder="请选择任务" />
+            </SelectTrigger>
+            <SelectContent>
+              {tasks.map((task) => (
+                <SelectItem key={task.task_id} value={task.task_id}>
+                  {task.task_id} ｜ {task.status} ｜ {task.mode} ｜ {task.user_input.slice(0, 24)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-      </div>
+      </Card>
 
       <DagGraph
         data={dagData}
@@ -151,11 +157,13 @@ export function DagViewPage() {
       />
 
       {dagData && dagData.nodes.length > 0 && (
-        <div className="rounded-lg bg-blue-50 p-4">
-          <p className="text-sm text-blue-700">
-            提示：拖拽可以移动视图，滚轮可以缩放。点击节点查看详情。
-          </p>
-        </div>
+        <Card className="border-primary/20 bg-primary/5">
+          <CardContent className="p-4">
+            <p className="text-sm text-primary">
+              提示：拖拽可以移动视图，滚轮可以缩放。点击节点查看详情。
+            </p>
+          </CardContent>
+        </Card>
       )}
     </div>
   )
