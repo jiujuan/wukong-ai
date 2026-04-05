@@ -8,8 +8,10 @@ import (
 	"github.com/jiujuan/wukong-ai/internal/handler"
 	"github.com/jiujuan/wukong-ai/internal/llm"
 	"github.com/jiujuan/wukong-ai/internal/middleware"
+	"github.com/jiujuan/wukong-ai/internal/parser"
 	"github.com/jiujuan/wukong-ai/internal/queue"
 	"github.com/jiujuan/wukong-ai/internal/state"
+	"github.com/jiujuan/wukong-ai/internal/upload"
 	"github.com/jiujuan/wukong-ai/pkg/config"
 )
 
@@ -21,11 +23,14 @@ type Router struct {
 	stateMgr    *state.Manager
 	queue       *queue.PersistentQueue
 	llmProvider llm.LLM
+	extractor   *parser.Extractor   // v1.1 附件提取器
+	uploadSvc   *upload.UploadService // v1.1 上传服务
 }
 
 // NewRouter 创建路由
 func NewRouter(cfg *config.AppConfig, eventBus *event.EventBus, stateMgr *state.Manager,
-	q *queue.PersistentQueue, llmProvider llm.LLM) *Router {
+	q *queue.PersistentQueue, llmProvider llm.LLM,
+	extractor *parser.Extractor, uploadSvc *upload.UploadService) *Router {
 
 	if cfg.Server.Env == "prod" {
 		gin.SetMode(gin.ReleaseMode)
@@ -43,6 +48,8 @@ func NewRouter(cfg *config.AppConfig, eventBus *event.EventBus, stateMgr *state.
 		stateMgr:    stateMgr,
 		queue:       q,
 		llmProvider: llmProvider,
+		extractor:   extractor,
+		uploadSvc:   uploadSvc,
 	}
 }
 
@@ -60,7 +67,7 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
-// Setup 注册路由
+// Setup 注册所有路由
 func (r *Router) Setup() {
 	runHandler          := handler.NewRunHandler(r.queue, r.cfg)
 	resumeHandler       := handler.NewResumeHandler(r.queue, r.cfg)
@@ -70,15 +77,16 @@ func (r *Router) Setup() {
 	streamHandler       := handler.NewStreamHandler(r.eventBus)
 	cancelHandler       := handler.NewCancelHandler(r.queue)
 	conversationHandler := handler.NewConversationHandler()
+	healthHandler       := handler.NewHealthHandler(r.llmProvider)
+	uploadHandler       := handler.NewUploadHandler(r.uploadSvc, r.extractor) // v1.1
 
 	// 健康检查
-	r.engine.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok", "version": "v0.9"})
-	})
+	r.engine.GET("/health",     healthHandler.Handle)
+	r.engine.GET("/health/llm", healthHandler.HandleLLM)
 
 	api := r.engine.Group("/api")
 	{
-		// ── 任务相关 ────────────────────────────────────────────
+		// 任务相关
 		api.POST("/run",         runHandler.Handle)
 		api.POST("/resume",      resumeHandler.Handle)
 		api.GET("/task",         taskHandler.Handle)
@@ -87,25 +95,21 @@ func (r *Router) Setup() {
 		api.POST("/task/cancel", cancelHandler.Handle)
 		api.GET("/list",         listHandler.Handle)
 
-		// ── 多轮对话 ────────────────────────────────────────────
-		// POST /api/conversation          创建对话
-		// POST /api/conversation/:id/run  在对话中提交新一轮任务（复用 runHandler）
-		// GET  /api/conversation/list     对话列表
-		// GET  /api/conversation/:id      对话详情 + 所有轮次
-		// DELETE /api/conversation/:id    删除对话
+		// 多轮对话（v0.9）
 		conv := api.Group("/conversation")
 		{
-			conv.POST("",          conversationHandler.Create)
-			conv.GET("/list",      conversationHandler.List)
-			conv.GET("/:id",       conversationHandler.GetDetail)
-			conv.DELETE("/:id",    conversationHandler.Delete)
-			// 在指定对话中提交新轮任务：前端传 conversation_id 到 /api/run 即可，
-			// 此路由作为语义化快捷入口，内部委托给 runHandler
-			conv.POST("/:id/run",  r.convRunHandler(runHandler))
+			conv.POST("",         conversationHandler.Create)
+			conv.GET("/list",     conversationHandler.List)
+			conv.GET("/:id",      conversationHandler.GetDetail)
+			conv.DELETE("/:id",   conversationHandler.Delete)
+			conv.POST("/:id/run", r.convRunHandler(runHandler))
 		}
+
+		// 文件上传（v1.1）
+		api.POST("/upload",        uploadHandler.Handle)
+		api.GET("/upload/status",  uploadHandler.HandleStatus)
 	}
 
-	// 前端 UI 路由
 	ui := r.engine.Group("/ui")
 	{
 		ui.GET("/list", func(c *gin.Context) {
@@ -114,12 +118,10 @@ func (r *Router) Setup() {
 	}
 }
 
-// convRunHandler 语义化路由 POST /api/conversation/:id/run
-// 自动将路径中的 :id 填入请求体的 conversation_id 字段
+// convRunHandler POST /api/conversation/:id/run
 func (r *Router) convRunHandler(runHandler *handler.RunHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		convID := c.Param("id")
-		// 将 conversation_id 注入到请求体前，先在 context 里透传
 		c.Set("override_conversation_id", convID)
 		runHandler.HandleWithConvID(c, convID)
 	}
