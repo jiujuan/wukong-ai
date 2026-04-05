@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -126,97 +125,6 @@ func (d *DeepSeekLLM) ChatWithHistory(ctx context.Context, messages []Message) (
 	return result.Choices[0].Message.Content, nil
 }
 
-func (d *DeepSeekLLM) ChatWithHistoryStream(ctx context.Context, messages []Message, onChunk func(chunk string) error) error {
-	reqBody := map[string]any{
-		"model": d.model,
-		"messages": func() []map[string]string {
-			result := make([]map[string]string, len(messages))
-			for i, m := range messages {
-				result[i] = map[string]string{
-					"role":    m.Role,
-					"content": m.Content,
-				}
-			}
-			return result
-		}(),
-		"temperature": 0.7,
-		"stream":      true,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/chat/completions", d.baseURL)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", d.apiKey))
-
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("DeepSeek API error: status=%d, model=%s", resp.StatusCode, d.model)
-		}
-		return fmt.Errorf("DeepSeek API error: status=%d, model=%s, body=%s", resp.StatusCode, d.model, string(respBody))
-	}
-
-	scanner := bufio.NewScanner(resp.Body)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "data:") {
-			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		}
-		if line == "" || line == "[DONE]" {
-			continue
-		}
-
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			return fmt.Errorf("failed to parse deepseek stream chunk: %w", err)
-		}
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-		content := chunk.Choices[0].Delta.Content
-		if content == "" {
-			continue
-		}
-		if onChunk != nil {
-			if err := onChunk(content); err != nil {
-				return err
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("deepseek stream read error: %w", err)
-	}
-	return nil
-}
-
 // Embed 生成文本向量 (DeepSeek 可能不支持 embedding API，使用备用方案)
 func (d *DeepSeekLLM) Embed(ctx context.Context, text string) ([]float32, error) {
 	// DeepSeek 目前没有公开的 embedding API，返回一个占位实现
@@ -227,4 +135,64 @@ func (d *DeepSeekLLM) Embed(ctx context.Context, text string) ([]float32, error)
 	}
 	logger.Warn("DeepSeek embedding not supported, returning placeholder")
 	return embedding, nil
+}
+
+// SupportsVision DeepSeek 支持 Vision（deepseek-vl 系列）
+// 对于 deepseek-chat 等文本模型返回 false；vl 模型返回 true
+func (d *DeepSeekLLM) SupportsVision() bool {
+	return strings.Contains(strings.ToLower(d.model), "vl")
+}
+
+// ChatWithImages DeepSeek Vision 调用（格式与 OpenAI 兼容）
+func (d *DeepSeekLLM) ChatWithImages(ctx context.Context, prompt string, images []string) (string, error) {
+	if !d.SupportsVision() {
+		// 非 Vision 模型：降级为纯文本
+		return d.Chat(ctx, prompt)
+	}
+
+	content := []map[string]any{{"type": "text", "text": prompt}}
+	for _, b64 := range images {
+		content = append(content, map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]string{"url": "data:image/jpeg;base64," + b64},
+		})
+	}
+
+	reqBody := map[string]any{
+		"model":    d.model,
+		"messages": []map[string]any{{"role": "user", "content": content}},
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("DeepSeek ChatWithImages marshal: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", d.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("DeepSeek ChatWithImages request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", d.apiKey))
+
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("DeepSeek ChatWithImages send: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("DeepSeek Vision error: status=%d", resp.StatusCode)
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct{ Content string `json:"content"` } `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil || len(result.Choices) == 0 {
+		return "", fmt.Errorf("DeepSeek Vision parse error")
+	}
+	return result.Choices[0].Message.Content, nil
 }
