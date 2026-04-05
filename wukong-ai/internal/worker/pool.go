@@ -10,6 +10,7 @@ import (
 	"github.com/jiujuan/wukong-ai/internal/conversation"
 	"github.com/jiujuan/wukong-ai/internal/db/repository"
 	"github.com/jiujuan/wukong-ai/internal/llm"
+	"github.com/jiujuan/wukong-ai/internal/memory"
 	"github.com/jiujuan/wukong-ai/internal/node"
 	"github.com/jiujuan/wukong-ai/internal/queue"
 	"github.com/jiujuan/wukong-ai/internal/skills"
@@ -60,7 +61,6 @@ func (p *Pool) Start(ctx context.Context, llmProvider llm.LLM, agentCfg *config.
 	}
 }
 
-// runWorker 运行单个 Worker
 func (p *Pool) runWorker(ctx context.Context, workerID string, llmProvider llm.LLM,
 	agentCfg *config.AgentConfig, promptDir string) {
 
@@ -72,10 +72,8 @@ func (p *Pool) runWorker(ctx context.Context, workerID string, llmProvider llm.L
 	for {
 		select {
 		case <-p.stopCh:
-			logger.Info("worker stopping", "worker_id", workerID)
 			return
 		case <-ctx.Done():
-			logger.Info("worker context cancelled", "worker_id", workerID)
 			return
 		default:
 		}
@@ -96,7 +94,6 @@ func (p *Pool) runWorker(ctx context.Context, workerID string, llmProvider llm.L
 	}
 }
 
-// executeJob 执行单个任务
 func (p *Pool) executeJob(ctx context.Context, job *queue.TaskJob, llmProvider llm.LLM,
 	agentCfg *config.AgentConfig, promptDir string, scheduler *subagent.Scheduler) {
 
@@ -134,10 +131,13 @@ func (p *Pool) executeJob(ctx context.Context, job *queue.TaskJob, llmProvider l
 		"skills", wCtx.SkillRegistry.GetNames(),
 	)
 
-	// ── 加载对话历史，注入上下文 ──────────────────────────────
+	// ── 加载对话历史 ──────────────────────────────────────────
 	if req.ConversationID != "" {
 		p.loadConversationHistory(wCtx, req.ConversationID)
 	}
+
+	// ── 加载附件列表 + 注入 AttachmentQuerier（v1.1）──────────
+	p.loadAttachments(wCtx, job.TaskID, llmProvider, 5)
 
 	// ── 创建 DAG 并执行 ───────────────────────────────────────
 	nodes := createNodes(llmProvider, scheduler, promptDir, wCtx.ToolRegistry, wCtx.SkillRegistry)
@@ -155,7 +155,6 @@ func (p *Pool) executeJob(ctx context.Context, job *queue.TaskJob, llmProvider l
 		logger.Error("job execution failed", "task_id", job.TaskID, "err", startErr)
 		engine.Fail(wCtx, startErr.Error())
 		p.queue.MarkFailed(job.TaskID, startErr.Error())
-		// 即使失败也保存用户轮（AI 轮不保存）
 		if req.ConversationID != "" {
 			p.saveTurns(wCtx, req.UserInput, "", req.ConversationID)
 		}
@@ -166,18 +165,50 @@ func (p *Pool) executeJob(ctx context.Context, job *queue.TaskJob, llmProvider l
 	p.queue.MarkSuccess(job.TaskID)
 	logger.Info("job completed", "task_id", job.TaskID)
 
-	// ── 任务成功后保存对话轮次 ────────────────────────────────
 	if req.ConversationID != "" {
 		p.saveTurns(wCtx, req.UserInput, wCtx.State.FinalOutput, req.ConversationID)
 	}
+}
+
+// loadAttachments 加载任务附件列表并注入 AttachmentQuerier
+func (p *Pool) loadAttachments(wCtx *workflow.WukongContext, taskID string, llmProvider llm.LLM, topK int) {
+	atts, err := repository.GetAttachmentsByTaskID(taskID)
+	if err != nil {
+		logger.Warn("failed to load attachments", "task_id", taskID, "err", err)
+		return
+	}
+	if len(atts) == 0 {
+		return
+	}
+
+	// 过滤出已提取完成的附件
+	var doneAtts []*repository.TaskAttachment
+	for _, a := range atts {
+		if a.ExtractStatus == "done" {
+			doneAtts = append(doneAtts, a)
+		}
+	}
+
+	if len(doneAtts) == 0 {
+		logger.Info("attachments not ready yet, skipping RAG injection",
+			"task_id", taskID, "total", len(atts))
+		return
+	}
+
+	wCtx.Attachments = doneAtts
+	if topK <= 0 {
+		topK = 5
+	}
+	wCtx.AttachmentQuerier = memory.NewAttachmentQuerier(llmProvider, topK)
+	logger.Info("attachments loaded for RAG",
+		"task_id", taskID, "count", len(doneAtts))
 }
 
 // loadConversationHistory 查询历史轮次并构建注入字符串
 func (p *Pool) loadConversationHistory(wCtx *workflow.WukongContext, convID string) {
 	conv, err := repository.GetConversation(convID)
 	if err != nil || conv == nil {
-		logger.Warn("conversation not found, running without history",
-			"conversation_id", convID, "err", err)
+		logger.Warn("conversation not found", "conversation_id", convID, "err", err)
 		return
 	}
 	wCtx.Conv = conv
@@ -187,26 +218,19 @@ func (p *Pool) loadConversationHistory(wCtx *workflow.WukongContext, convID stri
 		logger.Warn("failed to load conversation turns", "conversation_id", convID, "err", err)
 		return
 	}
-
 	wCtx.ConversationHistory = conversation.BuildConversationContext(conv, turns, conversation.MaxRecentTurns)
 	logger.Info("conversation history loaded",
-		"conversation_id", convID,
-		"turns_loaded", len(turns),
-		"history_length", len(wCtx.ConversationHistory),
-	)
+		"conversation_id", convID, "turns_loaded", len(turns))
 }
 
-// saveTurns 任务执行完成后，将本轮用户输入和 AI 输出追加到对话轮次表
+// saveTurns 保存对话轮次
 func (p *Pool) saveTurns(wCtx *workflow.WukongContext, userInput, finalOutput, convID string) {
 	nextIdx, err := repository.NextTurnIndex(convID)
 	if err != nil {
-		logger.Warn("failed to get next turn index", "conversation_id", convID, "err", err)
 		return
 	}
-
 	now := time.Now()
 
-	// 保存用户轮
 	userTurn := &conversation.Turn{
 		ConversationID: convID,
 		TurnIndex:      nextIdx,
@@ -214,11 +238,8 @@ func (p *Pool) saveTurns(wCtx *workflow.WukongContext, userInput, finalOutput, c
 		Content:        userInput,
 		CreateTime:     now,
 	}
-	if _, err := repository.AddTurn(userTurn); err != nil {
-		logger.Warn("failed to save user turn", "conversation_id", convID, "err", err)
-	}
+	repository.AddTurn(userTurn)
 
-	// 保存 AI 轮（有输出时才保存）
 	if finalOutput != "" {
 		summary := conversation.TruncateOutput(finalOutput, 200)
 		assistantTurn := &conversation.Turn{
@@ -226,33 +247,19 @@ func (p *Pool) saveTurns(wCtx *workflow.WukongContext, userInput, finalOutput, c
 			TaskID:         wCtx.Config.TaskID,
 			TurnIndex:      nextIdx + 1,
 			Role:           "assistant",
-			Content:        summary,     // 摘要（注入 Prompt 用）
-			FullOutput:     finalOutput, // 完整输出
+			Content:        summary,
+			FullOutput:     finalOutput,
 			CreateTime:     now,
 		}
-		if _, err := repository.AddTurn(assistantTurn); err != nil {
-			logger.Warn("failed to save assistant turn", "conversation_id", convID, "err", err)
-		}
+		repository.AddTurn(assistantTurn)
 	}
 
-	// 更新对话 turn_count
-	if err := repository.IncrTurnCount(convID); err != nil {
-		logger.Warn("failed to incr turn count", "conversation_id", convID, "err", err)
-	}
+	repository.IncrTurnCount(convID)
 
-	// 自动更新对话标题（如果还是默认标题）
 	if wCtx.Conv != nil && (wCtx.Conv.Title == "新对话" || wCtx.Conv.Title == "") {
 		title := conversation.TruncateOutput(userInput, 40)
-		if err := repository.UpdateConversationTitle(convID, title); err != nil {
-			logger.Warn("failed to update conversation title", "err", err)
-		}
+		repository.UpdateConversationTitle(convID, title)
 	}
-
-	logger.Info("conversation turns saved",
-		"conversation_id", convID,
-		"task_id", wCtx.Config.TaskID,
-		"turn_index", nextIdx,
-	)
 }
 
 // ── Tool / Skill 注册 ─────────────────────────────────────────────────────────
@@ -260,29 +267,21 @@ func (p *Pool) saveTurns(wCtx *workflow.WukongContext, userInput, finalOutput, c
 func registerTools(registry *tools.ToolRegistry, agentCfg *config.AgentConfig, req RunRequest) {
 	if req.TavilyAPIKey != "" {
 		registry.Register(toolsearch.NewTavilySearch(req.TavilyAPIKey))
-		logger.Debug("tool registered: tavily_search")
 	} else if req.DuckDuckGoEnabled {
 		registry.Register(toolsearch.NewDuckDuckGoSearch())
-		logger.Debug("tool registered: duckduckgo_search")
 	} else {
 		registry.Register(toolsearch.NewMockSearch())
-		logger.Debug("tool registered: mock_search (fallback)")
 	}
-
 	if len(req.FileAllowedPaths) > 0 {
 		registry.Register(toolfile.NewReader(req.FileAllowedPaths))
 		registry.Register(toolfile.NewWriter(req.FileAllowedPaths))
-		logger.Debug("tool registered: file_reader, file_writer")
 	}
-
 	if req.SandboxDir != "" {
 		if req.PythonReplEnabled {
 			registry.Register(toolcode.NewPythonREPL(req.SandboxDir, true))
-			logger.Debug("tool registered: python_repl")
 		}
 		if req.BashEnabled {
 			registry.Register(toolcode.NewBashExec(req.SandboxDir, true))
-			logger.Debug("tool registered: bash_exec")
 		}
 	}
 }
@@ -291,16 +290,10 @@ func registerSkills(registry *skills.SkillRegistry, llmProvider llm.LLM) {
 	registry.Register(basic.NewSummarize(llmProvider))
 	registry.Register(basic.NewTranslate(llmProvider))
 	registry.Register(basic.NewQA(llmProvider))
-	logger.Debug("skills registered: summarize, translate, qa")
 }
 
-func createNodes(
-	llmProvider llm.LLM,
-	scheduler *subagent.Scheduler,
-	promptDir string,
-	toolRegistry *tools.ToolRegistry,
-	skillRegistry *skills.SkillRegistry,
-) *workflow.NodeSet {
+func createNodes(llmProvider llm.LLM, scheduler *subagent.Scheduler, promptDir string,
+	toolRegistry *tools.ToolRegistry, skillRegistry *skills.SkillRegistry) *workflow.NodeSet {
 	return &workflow.NodeSet{
 		Coordinator:     node.NewCoordinator(llmProvider, promptDir, skillRegistry),
 		Background:      node.NewBackground(llmProvider, promptDir, toolRegistry),
@@ -313,18 +306,14 @@ func createNodes(
 
 // GracefulStop 优雅关闭
 func (p *Pool) GracefulStop() {
-	logger.Info("stopping worker pool")
 	close(p.stopCh)
 	p.wg.Wait()
-	logger.Info("worker pool stopped gracefully")
 }
 
 // GetSize 获取 Pool 大小
-func (p *Pool) GetSize() int {
-	return p.size
-}
+func (p *Pool) GetSize() int { return p.size }
 
-// RunRequest 运行请求（含工具开关和对话 ID）
+// RunRequest 运行请求
 type RunRequest struct {
 	UserInput       string   `json:"user_input"`
 	ThinkingEnabled bool     `json:"thinking_enabled"`
@@ -333,8 +322,7 @@ type RunRequest struct {
 	MaxSubAgents    int      `json:"max_sub_agents"`
 	TimeoutSeconds  int      `json:"timeout_seconds"`
 	ResumeFrom      string   `json:"resume_from,omitempty"`
-	ConversationID  string   `json:"conversation_id,omitempty"` // 多轮对话 ID
-	// 工具配置
+	ConversationID  string   `json:"conversation_id,omitempty"`
 	TavilyAPIKey      string   `json:"tavily_api_key,omitempty"`
 	DuckDuckGoEnabled bool     `json:"duckduckgo_enabled"`
 	FileAllowedPaths  []string `json:"file_allowed_paths,omitempty"`
