@@ -168,3 +168,77 @@ func (o *OpenAILLM) Embed(ctx context.Context, text string) ([]float32, error) {
 
 	return result.Data[0].Embedding, nil
 }
+
+// SupportsVision OpenAI 支持 Vision
+func (o *OpenAILLM) SupportsVision() bool {
+	return true
+}
+
+// ChatWithImages 发送携带图片的请求（OpenAI Vision API）
+func (o *OpenAILLM) ChatWithImages(ctx context.Context, prompt string, images []string) (string, error) {
+	// 构造 multimodal content
+	content := []map[string]any{
+		{"type": "text", "text": prompt},
+	}
+	for _, b64 := range images {
+		// 自动推断 MIME（简化处理，默认 jpeg）
+		mime := "image/jpeg"
+		if len(b64) > 10 {
+			switch b64[:8] {
+			case "iVBORw0K":
+				mime = "image/png"
+			case "R0lGODlh", "R0lGODdh":
+				mime = "image/gif"
+			}
+		}
+		dataURI := fmt.Sprintf("data:%s;base64,%s", mime, b64)
+		content = append(content, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]string{"url": dataURI},
+		})
+	}
+
+	reqBody := map[string]any{
+		"model":       o.model,
+		"messages":    []map[string]any{{"role": "user", "content": content}},
+		"temperature": 0.7,
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("ChatWithImages marshal: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", o.baseURL)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("ChatWithImages request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", o.apiKey))
+
+	resp, err := o.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ChatWithImages send: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("OpenAI Vision error: status=%d body=%s", resp.StatusCode, respBody)
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("ChatWithImages unmarshal: %w", err)
+	}
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("no choices from Vision API")
+	}
+	return result.Choices[0].Message.Content, nil
+}
